@@ -69,19 +69,42 @@ assistant 那条带 `tool_calls` 的消息**已经落盘、工具结果还没落
 ## 配置 `~/.dsh/liubian-twin/config.json`
 
 ```js
+// ── 闸门触发 ──
 twinChainHeadAlways: true,     // 规则①：链首 / 类型切换必审
 twinGapCalls: 10,              // 规则②：距上次审查 ≥N 次动作
 twinGapMinutes: 10,            // 规则②：距上次审查 ≥N 分钟
+twinMaxReviewsPerTurn: 12,     // 每回合审查预算（用尽静默跳过）
+// ── 送监内容 ──
 twinCriteria: '',              // 判据 JSON 路径（空 = 用覆盖文件，再退回插件自带）
 twinPrompt: '',                // 备用：额外的角色文字（一般直接改 criteria.json）
-twinMaxReviewsPerTurn: 12,     // 每回合审查预算（用尽静默跳过；实测单回合候选中位 9、最大 72）
-twinTimeoutMs: 30000,          // 单次审查超时（记为一次失败，进入重试）
+twinContextMode: 'flatten',    // 'flatten' 拍平最近若干轮 | 'isolated' 只带最近一条 | 'full' 整段对话 | 'none' 不给背景
+twinTranscriptRounds: 10,      // 拍平最近多少轮（一轮 = 人类发言 + 其后动作/工具往返）
+twinRoundChars: 0,             // 每轮字数上限（0 = 不限；正文与用户输入不设限）
+twinBackgroundChars: 0,        // 全局上限（0 = 不限）
+twinIncludeTools: false,       // 是否把工具调用/工具结果也拍进背景（默认丢掉）
+twinIncludeReasoning: true,    // 是否把模型的思考也拍进去
+twinStripMarkers: true,        // 清掉全角竖线 / ▁ / 思考阶段标记等特殊标识符
+twinForge: true,               // 结构伪造：指令后再递一条"思考已结束"的助手消息（只发不写会话）
+twinForgeReasoning: '（判据已逐条对照完毕，下面直接给结论。）',
+twinForgeContent: '',
+twinPrefill: '',               // 纯文本尾巴（老做法，默认关）
+// ── 超时与失败 ──
+twinIdleTimeoutMs: 5000,       // 两次输出之间的空档超过这么久才算超时（不掐思考耗时）
+twinTimeoutMs: 300000,         // 单次审查的绝对上限（兜底）
 twinRetryDelayMs: 5000,        // 失败后重试间隔
 twinRetryMax: 5,               // 最多重试次数
 twinUnavailableText: '监察api不可用，请尝试关闭插件或者稍后尝试',
 ```
 
 监察模型**固定用会话自己那个**（`session.requestContext()`），不提供切换开关。
+
+### 两处硬约束（踩过事故，改动时别绕开）
+
+1. **送监请求必须先补占位工具结果**：工具闸门被调用时，`deriveMessages()` 的尾巴是"assistant 已发
+   tool_calls、结果未落盘"，直接送上游必被拒收（表现为"空回复"）。`sanitizeForTwin()` 负责补。
+2. **落盘前必须过配对检查**：`pairingOk()` 要求每条 assistant 的每个 tool-call 后面**紧跟**一段连续的
+   工具结果把它覆盖；不满足就推迟重试（1.5s × 5），到上限宁可丢弃记录也不写。
+   会话写入（监察记录 / 固定文本 / 中断回合）一律排队到 `step/end` 再落。
 
 ## 开发
 
