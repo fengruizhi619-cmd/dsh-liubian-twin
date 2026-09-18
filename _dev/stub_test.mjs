@@ -708,6 +708,23 @@ await checkAsync('落盘前安全检查·工具窗口里绝不写，等尾部合
   assert.ok(appended.some(a => a.type === 'assistant/message'), '记录进了会话')
 })
 
+await checkAsync('监察记录永远带 reasoning 块（思考模式硬约束）', async () => {
+  const { agent, appended } = fakeAgent()
+  agent.session.id = 'S-reasoning'
+  const st = T.makeState()
+  st.turn = 1
+  st.step = 1
+  // thinking 为空：旧实现这时只写 text 块 → 上游会报 reasoning_content 必须回传
+  T.appendTwinRecord(agent, st, { verdict: { conform: true, reason: 'ok', correction: '' }, thinking: '' }, { kind: 'tool' })
+  const rec = appended.find(a => a.type === 'assistant/message')
+  assert.ok(rec, '应写入记录')
+  assert.equal(rec.data.message.content[0].type, 'reasoning', '第一条块必须是 reasoning')
+  assert.ok(String(rec.data.message.content[0].text).length > 0, 'reasoning 不能为空')
+  assert.equal(rec.data.message.content[1].type, 'text')
+  const forged = T.forgedAssistantMessage({ twinForgeReasoning: '', twinForgeContent: '' }, 'p', 'm')
+  assert.deepEqual(forged.content.map(b => b.type), ['reasoning'], '伪造尾兜底也必须是 reasoning 块')
+})
+
 await checkAsync('工具闸门·内部工具与递归跳过', async () => {
   const { agent } = fakeAgent()
   agent.session.id = 'S-skip'

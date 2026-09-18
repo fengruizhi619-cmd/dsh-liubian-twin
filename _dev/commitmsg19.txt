@@ -1,0 +1,12 @@
+﻿fix: 监察记录与伪造尾都必须带 reasoning 块（思考模式硬约束）
+
+用户报错：The `reasoning_content` in the thinking mode must be passed back to the API.
+
+成因：上游要求思考模式下历史里每条 assistant 消息都回传 reasoning_content，而
+appendTwinRecord 旧实现是"监察这次有思考才写 reasoning 块"，没有思考时记录只剩 text 块
+→ 下一轮请求被拒。伪造尾的兜底块同样写成了空 text 块，犯的是同一个错。
+
+修法：
+- appendTwinRecord：reasoning 块永远在场，没有思考正文时给占位「（本次监察没有留下思考正文）」。
+- forgedAssistantMessage：兜底从空 text 块改成 reasoning 块。
+桩测新增一项（thinking 为空时记录首块仍是 reasoning；伪造尾兜底也是 reasoning），27/27 通过。
