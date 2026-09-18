@@ -55,16 +55,34 @@ check('判据条目不带来源字段、字段齐备', () => {
   }
 })
 
-check('送监指令含 role / usage / 全部 44 条 / 契约 / 待审对象', () => {
-  const text = T.buildInstruction(criteria.doc, T.describeTarget('text', { text: '我打算删掉这个文件' }), { turn: 3, step: 2 })
+check('送监指令含 role / usage / 全部 44 条 / 契约 / 待审对象 / 用户原话', () => {
+  const text = T.buildInstruction(criteria.doc, T.describeTarget('text', { text: '我打算删掉这个文件' }), {
+    turn: 3,
+    step: 2,
+    userInstruction: '把 A 改成 B，别动别的',
+  })
   assert.ok(text.includes(criteria.doc.role.slice(0, 20)))
   assert.ok(text.includes(criteria.doc.usage))
   assert.ok(text.includes(criteria.doc.contract), `指令里应有契约；契约=${JSON.stringify(criteria.doc.contract)}`)
   assert.ok(text.includes('执行智能体准备输出的话'))
+  assert.ok(text.includes('只按这一段为准'), '必须点明只以引用的用户原话为准')
+  assert.ok(text.includes('«把 A 改成 B，别动别的»'), '用户原话要原文引进来')
   for (const it of criteria.doc.items) {
-    assert.ok(text.includes(`[场景] ${it.when} → 要求 ${it.q}`), `缺条目 ${it.id}`)
+    assert.ok(text.includes(`[场景] ${it.when} → ${it.q}`), `缺条目 ${it.id}`)
   }
   assert.ok(!text.includes('来源'), '指令里不应出现"来源"')
+})
+
+check('用户原话定位：跳过插件注入块与监察指令本身', () => {
+  const messages = [
+    { id: '1', role: 'system', content: [{ type: 'text', text: '系统提示' }], source: { kind: 'plugin', plugin: 'x' } },
+    { id: '2', role: 'user', content: [{ type: 'text', text: '<liubian-capabilities>…</liubian-capabilities>' }], source: { kind: 'plugin', plugin: 'dsh-liubian', form: 'catalog' } },
+    { id: '3', role: 'user', content: [{ type: 'text', text: '真正的用户指令：把 config.json 的 gap 改成 12' }], source: { kind: 'user' } },
+    { id: '4', role: 'assistant', content: [{ type: 'text', text: '好的' }], source: { kind: 'model', provider: 'p', model: 'm' } },
+    { id: '5', role: 'user', content: [{ type: 'text', text: '本轮监察指令（不该被当成用户原话）' }], source: { kind: 'plugin', plugin: 'dsh-liubian-twin', form: 'instructions' } },
+  ]
+  assert.equal(T.lastUserInstruction(messages), '真正的用户指令：把 config.json 的 gap 改成 12')
+  assert.equal(T.lastUserInstruction([messages[0], messages[4]]), '')
 })
 
 /* ── 2. 裁决解析 ───────────────────────────────────────────────────────── */

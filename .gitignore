@@ -1,3 +1,4 @@
 node_modules/
 *.log
 _dev/commitmsg.txt
+_dev/commitmsg2.txt
