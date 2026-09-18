@@ -473,12 +473,11 @@ await checkAsync('工具闸门·偏离 → deny + 注入纠正，工具不执行
   assert.ok(decision.reason.startsWith('[监察]'))
   assert.ok(decision.reason.includes('只改 A'))
   assert.equal(ran, false, '工具绝不能执行')
-  assert.equal(injected.length, 1)
-  assert.ok(injected[0].content[0].text.includes('只改 A'))
-  assert.equal(injected[0].source.form, 'instructions')
+  assert.equal(injected.length, 0, '纠正不再另注入一份（已随 deny 原因到达模型），避免重复打印')
   assert.equal(appended.length, 0, '工具窗口内绝不写会话')
   T.flushPending(agent, stD, ctx.logger)
   assert.ok(appended.some(a => a.type === 'assistant/message' && a.data.message.content[1].text.startsWith('〔监察〕纠正')))
+  assert.ok(appended.some(a => a.data?.message?.content?.[0]?.type === 'reasoning' && String(a.data.message.content[0].text).startsWith('〔监察思考〕')), '监察思考要带专门标记')
 })
 
 await checkAsync('工具闸门·监察不可用 → deny 兜底，notice/中断都排队到结果落盘之后', async () => {
