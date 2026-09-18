@@ -538,7 +538,7 @@ await checkAsync('送监消息形态·尾部挂着未回填的 tool_calls → �
   assert.equal(fixed2[2].content[0].toolCallId, 'c2')
 })
 
-await checkAsync('工具闸门·送监请求里带的是补过占位的消息（不是裸的 dangling）', async () => {
+await checkAsync('工具闸门·送监请求里带的是补过占位的消息（不是裸的 dangling；full 模式）', async () => {
   const { agent } = fakeAgent()
   agent.session.id = 'S-shape'
   agent.session.deriveMessages = () => [
@@ -550,16 +550,62 @@ await checkAsync('工具闸门·送监请求里带的是补过占位的消息（
   st.step = 1
   const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
   await m.__test.handleToolGate(
-    ctx, { ...cfg, twinRetryDelayMs: 1 },
+    ctx, { ...cfg, twinContextMode: 'full', twinRetryDelayMs: 1 },
     { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_z9' },
     async () => ({ kind: 'allow' }),
     ctx.logger,
   )
   const sent = ctx.messages[0]
   assert.ok(Array.isArray(sent), '应记录送出去的消息')
-  assert.equal(sent[sent.length - 2].content[0].type, 'tool-result', '倒数第二条应是给未执行调用补的占位结果')
-  assert.equal(sent[sent.length - 2].content[0].toolCallId, 'call_z9')
-  assert.equal(sent[sent.length - 1].role, 'user', '最后一条是监察指令')
+  const z9 = sent.findIndex(mm => Array.isArray(mm.content) && mm.content.some(b => b.type === 'tool-result' && b.toolCallId === 'call_z9'))
+  assert.ok(z9 > 0, '应给未执行的那个调用补了占位结果')
+  assert.equal(sent[z9 - 1].content.some(b => b.type === 'tool-call' && b.id === 'call_z9'), true, '占位结果紧跟在它的调用之后')
+  assert.ok(sent.slice(z9 + 1).some(mm => mm.role === 'user'), '后面还有监察指令（user）')
+})
+
+await checkAsync('结构伪造·送监请求末尾是一条"思考已结束"的助手消息（且绝不进会话）', async () => {
+  const forged = T.forgedAssistantMessage({ twinForgeReasoning: '（判据已逐条对照完毕，下面直接给结论。）', twinForgeContent: '' }, 'p', 'm')
+  assert.equal(forged.role, 'assistant')
+  assert.equal(forged.content[0].type, 'reasoning')
+  assert.ok(forged.content[0].text.includes('对照完毕'))
+  assert.ok(forged.id && forged.source.kind === 'model')
+
+  const { agent, appended } = fakeAgent()
+  agent.session.id = 'S-forge'
+  const st = T.stateFor('S-forge')
+  st.turn = 1
+  st.step = 1
+  const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
+  await m.__test.handleToolGate(
+    ctx, { ...cfg, twinRetryDelayMs: 1 },
+    { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_f1' },
+    async () => ({ kind: 'allow' }),
+    ctx.logger,
+  )
+  const sent = ctx.messages[0]
+  const tail = sent[sent.length - 1]
+  assert.equal(tail.role, 'assistant', '末尾应是伪造的助手消息')
+  assert.equal(tail.content[0].type, 'reasoning')
+  assert.equal(sent[sent.length - 2].role, 'user', '伪造消息前面是监察指令')
+  assert.equal(appended.filter(a => a.type === 'assistant/message').length, 0, '伪造消息绝不能写进会话')
+  T.flushPending(agent, st, ctx.logger)
+  const rec = appended.find(a => a.type === 'assistant/message')
+  assert.ok(rec.data.message.content[1].text.startsWith('〔监察〕通过'), '会话里只应出现真正的监察记录')
+
+  const off = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
+  const { agent: agent2 } = fakeAgent()
+  agent2.session.id = 'S-forge-off'
+  const st2 = T.stateFor('S-forge-off')
+  st2.turn = 1
+  st2.step = 1
+  await m.__test.handleToolGate(
+    off, { ...cfg, twinForge: false, twinRetryDelayMs: 1 },
+    { name: 'read', arguments: {}, agent: agent2, signal: new AbortController().signal, callId: 'call_f2' },
+    async () => ({ kind: 'allow' }),
+    off.logger,
+  )
+  const sent2 = off.messages[0]
+  assert.equal(sent2[sent2.length - 1].role, 'user', 'twinForge=false 时末尾回到监察指令')
 })
 
 await checkAsync('工具闸门·内部工具与递归跳过', async () => {
