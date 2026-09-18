@@ -1,12 +1,23 @@
-﻿fix: 监察记录与伪造尾都必须带 reasoning 块（思考模式硬约束）
+﻿fix: 所有我们贡献的助手消息一律带 reasoning 块（修 thinking 模式 reasoning_content 回传 400）
 
-用户报错：The `reasoning_content` in the thinking mode must be passed back to the API.
+报错：The `reasoning_content` in the thinking mode must be passed back to the API.
+根因：上游 thinking 模式要求回传的每条 assistant 消息都带 reasoning_content，
+而我们贡献的助手消息里有两类可能不带。
 
-成因：上游要求思考模式下历史里每条 assistant 消息都回传 reasoning_content，而
-appendTwinRecord 旧实现是"监察这次有思考才写 reasoning 块"，没有思考时记录只剩 text 块
-→ 下一轮请求被拒。伪造尾的兜底块同样写成了空 text 块，犯的是同一个错。
+逐处排查（全部贡献点）：
+1. 监察记录 appendTwinRecord —— 已带（thinking 为空时有占位）；本轮再往下兜一层。
+2. 结构伪造尾 forgedAssistantMessage —— 原来只在"两个字段都空"时补 reasoning；
+   现在只要配了 content 而没配 reasoning 也会缺 → 已修。
+3. 文本闸门否决时合成的 _twin_note 调用 noteCallChunks —— 只有 block-start/tool-call-delta/block-end，
+   压根没有 reasoning 块 → 已修（前面补一段合成的 reasoning 块，序号取 index-1）。
+4. noteTextChunks（不可用路径补固定申明）—— 只是往当前这一步的助手消息里加一个 text 块，
+   该消息本身是执行侧在 thinking 模式下产出的、已带 reasoning；thinking 关闭时上游也不要求 →
+   判定安全，不改（理由写进注释）。
+5. 其余（userMessage / placeholderToolResult / notice / 纠正注入）都是 user 角色，不受影响。
 
-修法：
-- appendTwinRecord：reasoning 块永远在场，没有思考正文时给占位「（本次监察没有留下思考正文）」。
-- forgedAssistantMessage：兜底从空 text 块改成 reasoning 块。
-桩测新增一项（thinking 为空时记录首块仍是 reasoning；伪造尾兜底也是 reasoning），27/27 通过。
+收敛做法：把保证写进共用构造 assistantRecordMessage()——只要块里没有 reasoning 就补一块占位，
+以后新增"我们造助手消息"的路径自动满足，不必逐个调用点记得补。
+
+验证：新增专项回归 _dev/test_reasoning_block.mjs（伪造尾空配置 / 两字段全空 / 监察记录 thinking 空 /
+合成调用分块首块与序号）全过；原桩测 27/27 通过；node --check 通过。
+生效：需插件重载或 DSH 重启。
