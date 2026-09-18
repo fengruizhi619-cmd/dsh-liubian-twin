@@ -621,9 +621,12 @@ await checkAsync('上下文清洗·特殊标识符被清掉，拍平成普通文
     { id: 'a1', role: 'assistant', content: [{ type: 'reasoning', text: `先看看文件${BAR}${BAR}` }, { type: 'text', text: '我准备改 C' }, { type: 'tool-call', id: 'c1', name: 'edit', arguments: '{"file_path":"c.txt"}' }], source: { kind: 'model' } },
     { id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: '改好了' }], isError: false }], source: { kind: 'tool', callId: 'c1' } },
   ]
-  const ctxText = T.contextTextFor(base, { twinContextMode: 'flatten', twinTranscriptMessages: 6, twinBackgroundChars: 1500, twinStripMarkers: true })
-  assert.ok(ctxText.includes('【执行侧】') && ctxText.includes('【用户/工具】'), '要带角色标签')
+  const ctxText = T.contextTextFor(base, { twinContextMode: 'flatten', twinTranscriptRounds: 10, twinBackgroundChars: 12000, twinStripMarkers: true })
+  assert.ok(ctxText.includes('【执行侧】') && (ctxText.includes('【用户】') || ctxText.includes('【工具】')), '要带角色标签')
   assert.equal(/[\uFF5C\u2581]|<\/?think>/i.test(ctxText), false, '背景文本里不该有特殊标识符')
+  assert.equal(/调用工具|工具结果/.test(ctxText), false, '默认不把工具调用/工具结果写进背景')
+  const withTools = T.flattenTranscript(base, { twinTranscriptRounds: 10, twinRoundChars: 1200, twinIncludeTools: true })
+  assert.ok(withTools.includes('调用工具 edit'), 'twinIncludeTools=true 时才写入工具调用')
 
   // 送监文档要按"要求 / 上下文依据 / 待判别动作"分块
   const doc = T.buildInstruction(criteria.doc, T.describeTarget('tool', { name: 'pwsh', arguments: { command: 'Get-Date' } }), {
