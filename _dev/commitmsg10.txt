@@ -1,0 +1,17 @@
+﻿feat: 上下文拍平成普通文本 + 清掉特殊标识符（flatten 模式成为默认）
+
+用户指定：把上下文里的特殊标识符全去掉、处理成一段普通文本，让伪造尾能正常诱导。
+
+1. stripSpecialTokens()：清掉全角竖线（U+FF5C）、词间分隔符 ▁（U+2581）、
+   `<think>` / `</think>` 这对阶段标记，只留普通文字（可配 twinStripMarkers: false 关掉）。
+2. flattenTranscript()：把最近 N 条（twinTranscriptMessages，默认 6）拍平成一段带角色标签的
+   普通文本——思考/正文/工具调用/工具结果全部转成可读文字，再清标记。
+3. twinContextMode 默认改成 'flatten'：送监 = [拍平后的记录(一条 user) + 监察指令(user) + 伪造助手尾]，
+   并且明确告诉模型"这不是对话、不用接着写"。'isolated' / 'full' 仍保留可切。
+
+实测（真会话 deepseek-flash，各 1 次，同一个待审动作）：
+   flatten 6 条  → 5.1s，deny，332 字真裁决，无工具调用标记
+   flatten 20 条 → 3.7s，deny，248 字真裁决，无工具调用标记
+   isolated 单条 → 5.6s，deny，339 字真裁决，无工具调用标记
+   （对照：此前 full 模式 23s 且必吐工具调用标记、拿不到结论词）
+桩测 25/25 通过（新增"上下文清洗"一项，断言拍平产物里不再残留任何特殊标识符）。

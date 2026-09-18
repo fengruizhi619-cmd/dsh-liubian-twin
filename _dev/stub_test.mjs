@@ -608,6 +608,29 @@ await checkAsync('结构伪造·送监请求末尾是一条"思考已结束"的�
   assert.equal(sent2[sent2.length - 1].role, 'user', 'twinForge=false 时末尾回到监察指令')
 })
 
+await checkAsync('上下文清洗·特殊标识符被清掉，拍平成普通文本', () => {
+  const BAR = String.fromCharCode(0xff5c)
+  const SEP = String.fromCharCode(0x2581)
+  const dirty = `正常一句\n<${BAR}${BAR}DSML${BAR}${BAR} calls> <think>想了想</think> 开始${SEP}调用`
+  const clean = T.stripSpecialTokens(dirty)
+  assert.equal(/[\uFF5C\u2581]|<\/?think>/i.test(clean), false, `不该残留特殊标识符：${JSON.stringify(clean)}`)
+  assert.ok(clean.includes('正常一句') && clean.includes('想了想'), '普通文字要留着')
+
+  const base = [
+    { id: 'u1', role: 'user', content: [{ type: 'text', text: '把 A 改成 B' }], source: { kind: 'user' } },
+    { id: 'a1', role: 'assistant', content: [{ type: 'reasoning', text: `先看看文件${BAR}${BAR}` }, { type: 'text', text: '我准备改 C' }, { type: 'tool-call', id: 'c1', name: 'edit', arguments: '{"file_path":"c.txt"}' }], source: { kind: 'model' } },
+    { id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: '改好了' }], isError: false }], source: { kind: 'tool', callId: 'c1' } },
+  ]
+  const transcript = T.flattenTranscript(base, { twinTranscriptMessages: 6, twinBackgroundChars: 0 })
+  assert.ok(transcript.includes('【执行侧】') && transcript.includes('【用户/工具】'), '要带角色标签')
+  assert.ok(transcript.includes('调用工具 edit'), '工具调用要变成可读文字')
+  assert.equal(/[\uFF5C\u2581]|<\/?think>/i.test(transcript), false, '拍平产物里不该有特殊标识符')
+
+  const msgs = T.backgroundMessages(base, { twinContextMode: 'flatten', twinTranscriptMessages: 6, twinBackgroundChars: 1500, twinStripMarkers: true })
+  assert.equal(msgs.length, 1)
+  assert.ok(msgs[0].content[0].text.includes('已经处理成普通文本'), '要说明这不是对话、不用接着写')
+})
+
 await checkAsync('工具闸门·内部工具与递归跳过', async () => {
   const { agent } = fakeAgent()
   agent.session.id = 'S-skip'
