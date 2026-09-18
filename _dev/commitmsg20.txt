@@ -1,0 +1,9 @@
+﻿fix: 修掉已落地的"缺 reasoning 块"记录 + 补两个排障/修复脚本
+
+- _dev/find_bad_records.cjs：扫全库找"我们写的监察记录里缺 reasoning 块"的（会导致该会话之后
+  每轮请求都被上游以 reasoning_content 必须回传为由拒收）。扫 26 个含〔监察〕的会话，命中 1 条。
+- _dev/repair_reasoning.cjs：给这类记录补一个 reasoning 块（只改这一条内容、不删记录、seq 不动），
+  演练/落地两档，带备份、帧 0 一行头、往返一致、记录数不变、seq 未改动五项自检。
+- 已对 session-ea66a0fa 落地：补 1 条，备份 .bak-reasoning-20260918231306；
+  复扫 0 条，dsh-plugin-checklist 全库体检 812/812 PASS。
+- _dev/effect_report.mjs：实战效果报告（口径全写明，日志/记录/配对三块），上一轮被要求补口径后新增。
