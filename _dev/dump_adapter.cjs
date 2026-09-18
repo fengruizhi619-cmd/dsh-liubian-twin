@@ -6,7 +6,7 @@ process.noAsar = true
 const fs = require('fs')
 
 const ASAR = 'E:/DSH Desktop/resources/app.asar'
-const TARGET = 'node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js'
+const TARGET = process.env.DUMP_TARGET || 'node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js'
 const codes = s => [...s].map(ch => { const cp = ch.codePointAt(0); return cp < 128 ? ch : 'U+' + cp.toString(16).toUpperCase() }).join('')
 
 const buf = fs.readFileSync(ASAR)

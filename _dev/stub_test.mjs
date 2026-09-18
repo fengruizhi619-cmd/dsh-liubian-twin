@@ -641,6 +641,64 @@ await checkAsync('上下文清洗·特殊标识符被清掉，拍平成普通文
   assert.ok(doc.includes('调用工具') || doc.includes('pwsh'), '待判别动作要在第三节里')
 })
 
+await checkAsync('落盘前安全检查·工具窗口里绝不写，等尾部合法了再写', async () => {
+  const dangling = {
+    session: {
+      id: 'S-guard',
+      deriveMessages: () => [
+        { id: 'u1', role: 'user', content: [{ type: 'text', text: '看看' }], source: { kind: 'user' } },
+        { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'cx', name: 'read', arguments: '{}' }], source: { kind: 'model' } },
+      ],
+    },
+  }
+  assert.equal(T.tailIsWritable(dangling), false, '有未回填的工具调用时不许写')
+  const answered = {
+    session: {
+      id: 'S-guard2',
+      deriveMessages: () => [
+        { id: 'u1', role: 'user', content: [{ type: 'text', text: '看看' }], source: { kind: 'user' } },
+        { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'cx', name: 'read', arguments: '{}' }], source: { kind: 'model' } },
+        { id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'cx', content: [{ type: 'text', text: 'ok' }], isError: false }], source: { kind: 'tool', callId: 'cx' } },
+      ],
+    },
+  }
+  assert.equal(T.tailIsWritable(answered), true, '结果补齐后允许写')
+  assert.equal(T.tailIsWritable({ session: { deriveMessages: () => [{ role: 'assistant', content: [{ type: 'text', text: '说完了' }] }] } }), true)
+  // ①.5 关键：结果虽然在，但中间插了别的消息（2026-09-19 事故的坏法）→ 依然不许写
+  const interleaved = {
+    session: {
+      id: 'S-guard-bad',
+      deriveMessages: () => [
+        { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'cx', name: 'read', arguments: '{}' }], source: { kind: 'model' } },
+        { id: 'x1', role: 'assistant', content: [{ type: 'reasoning', text: '插进来的' }, { type: 'text', text: '〔监察〕…' }], source: { kind: 'model' } },
+        { id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'cx', content: [], isError: false }], source: { kind: 'tool' } },
+      ],
+    },
+  }
+  assert.equal(T.pairingOk(interleaved.session.deriveMessages()), false, '中间插了消息就是不合法')
+  assert.equal(T.tailIsWritable(interleaved), false, '已坏的会话也不许再写')
+
+  const { agent, appended } = fakeAgent()
+  agent.session.id = 'S-guard3'
+  let tail = 'dangling'
+  agent.session.deriveMessages = () => (tail === 'dangling'
+    ? [{ id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'cx', name: 'read', arguments: '{}' }], source: { kind: 'model' } }]
+    : [{ id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'cx', content: [], isError: false }], source: { kind: 'tool' } }])
+  const log2 = { info: () => {}, warn: () => {}, debug: () => {} }
+  const st = T.makeState()
+  st.turn = 1
+  st.step = 1
+  T.queueRecord(st, { verdict: { conform: true, reason: 'ok', correction: '' }, thinking: '' }, 'tool')
+  const first = T.flushPending(agent, st, log2)
+  assert.equal(first.length, 0, '尾部不安全时不该写')
+  assert.equal(appended.length, 0, '一个字节都不许写进会话')
+  assert.equal(st.pending.length, 1, '排队项要留着，等安全时点')
+  tail = 'safe'
+  const second = T.flushPending(agent, st, log2)
+  assert.equal(second.includes('record'), true, '安全了才落盘')
+  assert.ok(appended.some(a => a.type === 'assistant/message'), '记录进了会话')
+})
+
 await checkAsync('工具闸门·内部工具与递归跳过', async () => {
   const { agent } = fakeAgent()
   agent.session.id = 'S-skip'
