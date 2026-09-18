@@ -124,6 +124,15 @@ check('裁决解析：普通话结论词为主，JSON 也认，认不出才算�
   const e = T.parseVerdict('{"conform":false,"reason":"含 { 花括号 } 与 \\" 引号","correction":"x"}')
   assert.equal(e.ok, true)
   assert.equal(e.verdict.reason, '含 { 花括号 } 与 " 引号')
+  // ⑤.5 首行以结论词开头但很长（实测模型会写「通过：<很长的理由>」）→ 必须按首行判，不能判反
+  const longPass = T.parseVerdict('通过：这一步是对交接手册.md 做只读 grep，用 pattern 提取标题行，属于正常一步，路径明确、操作只读、不改动任何内容，也没有触碰用户交办范围之外的东西，不算偏离。')
+  assert.equal(longPass.ok, true, '长首行也要能判')
+  assert.equal(longPass.verdict.conform, true, '长首行的「通过」不能被后面的字眼判反')
+  assert.ok(longPass.verdict.reason.includes('只读 grep'), '理由要带上首行结论词之后的内容')
+  const longDeny = T.parseVerdict('纠正：这个动作只对应「看内容」一半，漏掉关键一半——只读了一份文件就收工，等于把“了解现状”缩成“挑一份文件看”。')
+  assert.equal(longDeny.verdict.conform, false, '长首行的「纠正」要判成纠正')
+  assert.equal(T.parseVerdict('这一步不算偏离，可以做。').verdict.conform, true)
+  assert.equal(T.parseVerdict('该动作未越过用户交办的范围。').verdict.conform, true)
   // ⑥ 认不出结论词 / 空回复 → 失败（触发重试，绝不拿模型的话当裁决）
   assert.equal(T.parseVerdict('嗯，让我先看看这一步做了什么。').ok, false)
   assert.equal(T.parseVerdict('').ok, false)
