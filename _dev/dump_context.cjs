@@ -42,6 +42,12 @@ const MSG_EVENTS = new Set(['user/message', 'system/message', 'assistant/message
 function messagesOf(records) {
   const out = []
   for (const r of records) {
+    // 人类那条消息在日志里先以 inbox 投递（inserted[]）出现，再materialize 成 user/message；
+    // 正在跑的那一轮可能只有 inbox 事件，两边都收才不漏。
+    if (r.type === 'agent/inbox/spliced' && Array.isArray(r.data?.inserted)) {
+      for (const m of r.data.inserted) if (m && m.role) out.push(m)
+      continue
+    }
     if (!MSG_EVENTS.has(r.type)) continue
     const m = r.data && r.data.message
     if (m) out.push(m)
@@ -104,8 +110,14 @@ async function main() {
     turn: '?', step: '?',
     userInstruction: mod.lastUserInstruction(sanitized),
     prefill: cfg.twinPrefill,
+    contextText: mod.contextTextFor(sanitized, cfg),
   })
-  const withInstruction = [...sanitized, mod.__test.userMessage(instruction, 'instructions')]
+  // 与插件实际发送的形状一致：隔离/拍平模式下只发这一份文档（背景已在第二节里），
+  // full 模式才是「整段历史 + 这份文档」。
+  const isolated = String(cfg.twinContextMode || 'flatten').toLowerCase() !== 'full'
+  const withInstruction = isolated
+    ? [mod.__test.userMessage(instruction, 'instructions')]
+    : [...sanitized, mod.__test.userMessage(instruction, 'instructions')]
 
   fs.mkdirSync(OUT_DIR, { recursive: true })
   fs.writeFileSync(path.join(OUT_DIR, 'messages.json'), JSON.stringify(sanitized, null, 2), 'utf8')

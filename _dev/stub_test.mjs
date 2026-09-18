@@ -75,7 +75,7 @@ check('送监指令含 role / usage / 全部 44 条 / 契约 / 待审对象 / �
   assert.ok(text.includes('只按这一段为准'), '必须点明只以引用的用户原话为准')
   assert.ok(text.includes('«把 A 改成 B，别动别的»'), '用户原话要原文引进来')
   for (const it of criteria.doc.items) {
-    assert.ok(text.includes(`[场景] ${it.when} → ${it.q}`), `缺条目 ${it.id}`)
+    assert.ok(text.includes(`${it.id}. **${it.when}** → ${it.q}`), `缺条目 ${it.id}`)
   }
   assert.ok(!text.includes('来源'), '指令里不应出现"来源"')
 })
@@ -621,14 +621,21 @@ await checkAsync('上下文清洗·特殊标识符被清掉，拍平成普通文
     { id: 'a1', role: 'assistant', content: [{ type: 'reasoning', text: `先看看文件${BAR}${BAR}` }, { type: 'text', text: '我准备改 C' }, { type: 'tool-call', id: 'c1', name: 'edit', arguments: '{"file_path":"c.txt"}' }], source: { kind: 'model' } },
     { id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: '改好了' }], isError: false }], source: { kind: 'tool', callId: 'c1' } },
   ]
-  const transcript = T.flattenTranscript(base, { twinTranscriptMessages: 6, twinBackgroundChars: 0 })
-  assert.ok(transcript.includes('【执行侧】') && transcript.includes('【用户/工具】'), '要带角色标签')
-  assert.ok(transcript.includes('调用工具 edit'), '工具调用要变成可读文字')
-  assert.equal(/[\uFF5C\u2581]|<\/?think>/i.test(transcript), false, '拍平产物里不该有特殊标识符')
+  const ctxText = T.contextTextFor(base, { twinContextMode: 'flatten', twinTranscriptMessages: 6, twinBackgroundChars: 1500, twinStripMarkers: true })
+  assert.ok(ctxText.includes('【执行侧】') && ctxText.includes('【用户/工具】'), '要带角色标签')
+  assert.equal(/[\uFF5C\u2581]|<\/?think>/i.test(ctxText), false, '背景文本里不该有特殊标识符')
 
-  const msgs = T.backgroundMessages(base, { twinContextMode: 'flatten', twinTranscriptMessages: 6, twinBackgroundChars: 1500, twinStripMarkers: true })
-  assert.equal(msgs.length, 1)
-  assert.ok(msgs[0].content[0].text.includes('已经处理成普通文本'), '要说明这不是对话、不用接着写')
+  // 送监文档要按"要求 / 上下文依据 / 待判别动作"分块
+  const doc = T.buildInstruction(criteria.doc, T.describeTarget('tool', { name: 'pwsh', arguments: { command: 'Get-Date' } }), {
+    turn: 3, step: 2, userInstruction: '把 A 改成 B', contextText: ctxText,
+  })
+  for (const head of ['## 一、要求', '## 二、上下文依据', '## 三、待判别的动作', '## 四、现在开始']) {
+    assert.ok(doc.includes(head), `缺分块标题：${head}`)
+  }
+  assert.ok(doc.indexOf('## 一、要求') < doc.indexOf('## 二、上下文依据'), '分块顺序要对')
+  assert.ok(doc.includes('【执行侧】'), '上下文依据要带上拍平后的记录')
+  assert.ok(doc.includes('> «把 A 改成 B»'), '用户原话要引用块化')
+  assert.ok(doc.includes('调用工具') || doc.includes('pwsh'), '待判别动作要在第三节里')
 })
 
 await checkAsync('工具闸门·内部工具与递归跳过', async () => {

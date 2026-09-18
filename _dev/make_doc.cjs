@@ -29,7 +29,7 @@ const want = [
   'export function placeholderToolResult',
   'export function stripSpecialTokens',
   'export function flattenTranscript',
-  'export function backgroundMessages',
+  'export function contextTextFor',
   'export function forgedAssistantMessage',
   'export async function callTwin',
   'export function parseVerdict',
