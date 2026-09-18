@@ -477,7 +477,9 @@ await checkAsync('工具闸门·偏离 → deny + 注入纠正，工具不执行
   assert.equal(appended.length, 0, '工具窗口内绝不写会话')
   T.flushPending(agent, stD, ctx.logger)
   assert.ok(appended.some(a => a.type === 'assistant/message' && a.data.message.content[1].text.startsWith('〔监察〕纠正')))
-  assert.ok(appended.some(a => a.data?.message?.content?.[0]?.type === 'reasoning' && String(a.data.message.content[0].text).startsWith('〔监察思考〕')), '监察思考要带专门标记')
+  // 思考正文默认不进上下文（只留一句最短标记），所以这里只断言"reasoning 块在场且带〔监察思考…〕标记"，
+  // 不要求它等于监察原文——恢复"思考进会话"要显式开 twinRecordThinking。
+  assert.ok(appended.some(a => a.data?.message?.content?.[0]?.type === 'reasoning' && String(a.data.message.content[0].text).includes('〔监察思考')), '监察思考要带专门标记（最短标记也算）')
 })
 
 await checkAsync('工具闸门·监察不可用 → deny 兜底，notice/中断都排队到结果落盘之后', async () => {
