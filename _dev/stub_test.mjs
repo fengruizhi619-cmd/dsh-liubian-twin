@@ -355,12 +355,15 @@ function fakeAgent() {
 /** 假 ctx：llm.stream 直接吐一段裁决 JSON；重试次数可配。 */
 function fakeCtx({ verdicts = [], thinking = '先看指令对应哪一句' } = {}) {
   const calls = []
+  const messages = []
   let i = 0
   return {
     calls,
+    messages,
     logger: { info: () => {}, warn: () => {}, debug: () => {} },
     llm: {
-      stream() {
+      stream(options) {
+        messages.push(options?.messages)
         const v = verdicts[Math.min(i, verdicts.length - 1)]
         i += 1
         calls.push(v)
@@ -402,6 +405,9 @@ await checkAsync('工具闸门·通过 → 工具照常执行（allow）', async
   )
   assert.deepEqual(decision, { kind: 'allow' })
   assert.equal(ran, true)
+  assert.equal(appended.length, 0, '工具窗口内绝不写会话：记录必须先排队')
+  assert.equal(st.pending.length, 1, '通过也要留一条待落盘记录')
+  T.flushPending(agent, st, ctx.logger)
   const rec = appended.find(a => a.type === 'assistant/message')
   assert.ok(rec, '应追加监察思考记录')
   assert.equal(rec.opts.surfaceOp, 'append')
@@ -432,14 +438,19 @@ await checkAsync('工具闸门·偏离 → deny + 注入纠正，工具不执行
   assert.equal(injected.length, 1)
   assert.ok(injected[0].content[0].text.includes('只改 A'))
   assert.equal(injected[0].source.form, 'instructions')
+  assert.equal(appended.length, 0, '工具窗口内绝不写会话')
+  T.flushPending(agent, stD, ctx.logger)
   assert.ok(appended.some(a => a.type === 'assistant/message' && a.data.message.content[1].text.startsWith('〔监察〕纠正')))
 })
 
-await checkAsync('工具闸门·监察不可用 → notice 固定文本 + 中断回合 + deny 兜底', async () => {
+await checkAsync('工具闸门·监察不可用 → deny 兜底，notice/中断都排队到结果落盘之后', async () => {
   const { agent, appended, cancelled } = fakeAgent()
   agent.session.id = 'S-unavail'
   const ctx = fakeCtx({ verdicts: ['not json'] })
   const cfg2 = { ...cfg, twinRetryDelayMs: 1, twinRetryMax: 5 }
+  const st = T.stateFor('S-unavail')
+  st.turn = 1
+  st.step = 7
   const decision = await m.__test.handleToolGate(
     ctx, cfg2,
     { name: 'bash', arguments: {}, agent, signal: new AbortController().signal, callId: 'c3' },
@@ -449,12 +460,77 @@ await checkAsync('工具闸门·监察不可用 → notice 固定文本 + 中断
   assert.equal(ctx.calls.length, 5, `应恰好重试 5 次，实际 ${ctx.calls.length}`)
   assert.equal(decision.kind, 'deny')
   assert.equal(decision.reason, cfg2.twinUnavailableText)
+  // 关键回归：这一步还在工具窗口里，**一个字节都不能写会话、也不能中断回合**
+  assert.equal(appended.length, 0, '窗口内不许写会话（写进去 = 这条会话永久报废）')
+  assert.equal(cancelled.length, 0, '窗口内不许中断回合')
+  assert.equal(st.twinDown, true, '本回合应标记为监察不可用')
+  // 本步剩下的调用一律拒掉，不再重试
+  const again = await m.__test.handleToolGate(
+    ctx, cfg2,
+    { name: 'bash', arguments: {}, agent, signal: new AbortController().signal, callId: 'c4' },
+    async () => ({ kind: 'allow' }),
+    ctx.logger,
+  )
+  assert.equal(again.kind, 'deny')
+  assert.equal(ctx.calls.length, 5, 'twinDown 之后不再发起监察调用')
+  // 工具结果落盘（step/end）后才落通知 + 中断
+  T.flushPending(agent, st, ctx.logger)
   const notice = appended.find(a => a.type === 'user/message')
-  assert.ok(notice, '应先送 notice')
+  assert.ok(notice, '落盘时应送 notice')
   assert.equal(notice.data.source.form, 'notice')
   assert.equal(notice.data.content[0].text, cfg2.twinUnavailableText)
   assert.equal(cancelled.length, 1)
   assert.equal(cancelled[0].opts.keepInbox, true)
+})
+
+await checkAsync('送监消息形态·尾部挂着未回填的 tool_calls → 补占位工具结果', async () => {
+  const dangling = [
+    { id: 'u1', role: 'user', content: [{ type: 'text', text: '看看目录' }], source: { kind: 'user' } },
+    { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'call_x1', name: 'glob', arguments: '{}' }], source: { kind: 'model' } },
+  ]
+  const fixed = T.sanitizeForTwin(dangling)
+  assert.equal(fixed.length, 3, '应补一条占位结果')
+  assert.equal(fixed[1], dangling[1], '原消息不能动（前缀缓存）')
+  const ph = fixed[2]
+  assert.equal(ph.role, 'user')
+  assert.equal(ph.content[0].type, 'tool-result')
+  assert.equal(ph.content[0].toolCallId, 'call_x1')
+  assert.ok(ph.content[0].content[0].text.includes('尚未执行'))
+  // 已经配过对的调用不能被补第二条结果
+  const paired = [...dangling, { id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'call_x1', content: [{ type: 'text', text: 'a.txt' }] }], source: { kind: 'tool' } }]
+  assert.equal(T.sanitizeForTwin(paired).length, 3, '已配对的不能再补')
+  // 一条 assistant 带多个调用时，缺几个补几个
+  const two = [
+    { id: 'a2', role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'read' }, { type: 'tool-call', id: 'c2', name: 'read' }], source: { kind: 'model' } },
+    { id: 't2', role: 'user', content: [{ type: 'tool-result', toolCallId: 'c1', content: [] }], source: { kind: 'tool' } },
+  ]
+  const fixed2 = T.sanitizeForTwin(two)
+  assert.equal(fixed2.length, 3)
+  assert.equal(fixed2[2].content[0].toolCallId, 'c2')
+})
+
+await checkAsync('工具闸门·送监请求里带的是补过占位的消息（不是裸的 dangling）', async () => {
+  const { agent } = fakeAgent()
+  agent.session.id = 'S-shape'
+  agent.session.deriveMessages = () => [
+    { id: 'u1', role: 'user', content: [{ type: 'text', text: '看看目录' }], source: { kind: 'user' } },
+    { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'call_z9', name: 'read', arguments: '{}' }], source: { kind: 'model' } },
+  ]
+  const st = T.stateFor('S-shape')
+  st.turn = 1
+  st.step = 1
+  const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
+  await m.__test.handleToolGate(
+    ctx, { ...cfg, twinRetryDelayMs: 1 },
+    { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_z9' },
+    async () => ({ kind: 'allow' }),
+    ctx.logger,
+  )
+  const sent = ctx.messages[0]
+  assert.ok(Array.isArray(sent), '应记录送出去的消息')
+  assert.equal(sent[sent.length - 2].content[0].type, 'tool-result', '倒数第二条应是给未执行调用补的占位结果')
+  assert.equal(sent[sent.length - 2].content[0].toolCallId, 'call_z9')
+  assert.equal(sent[sent.length - 1].role, 'user', '最后一条是监察指令')
 })
 
 await checkAsync('工具闸门·内部工具与递归跳过', async () => {
