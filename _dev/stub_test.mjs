@@ -55,6 +55,13 @@ check('判据条目不带来源字段、字段齐备', () => {
   }
 })
 
+check('输出契约不强制 JSON：用普通话结论词（通过／纠正）', () => {
+  const c = criteria.doc.contract
+  assert.ok(!/JSON：\{/.test(c), `契约不该再要求 JSON：${c}`)
+  assert.ok(c.includes('第一行写「通过」') && c.includes('第一行写「纠正」'), '契约要给出两个结论词')
+  assert.ok(criteria.doc.role.includes('第一行只写「通过」或「纠正」'), 'role 里也要写清结论词')
+})
+
 check('送监指令含 role / usage / 全部 44 条 / 契约 / 待审对象 / 用户原话', () => {
   const text = T.buildInstruction(criteria.doc, T.describeTarget('text', { text: '我打算删掉这个文件' }), {
     turn: 3,
@@ -87,17 +94,39 @@ check('用户原话定位：跳过插件注入块与监察指令本身', () => {
 
 /* ── 2. 裁决解析 ───────────────────────────────────────────────────────── */
 
-check('裁决解析：裸 JSON / 围栏 / 夹话 / 非法', () => {
-  const a = T.parseVerdict('{"conform":true,"reason":"对得上指令","correction":""}')
+check('裁决解析：普通话结论词为主，JSON 也认，认不出才算失败', () => {
+  // ① 默认形态：普通话，第一行结论词
+  const a = T.parseVerdict('通过\n这一步对应用户说的「改配置」，参数只有文件路径，没有多做。')
   assert.equal(a.ok, true)
   assert.equal(a.verdict.conform, true)
-  const b = T.parseVerdict('裁决如下：\n```json\n{"conform":false,"reason":"越权","correction":"先问用户"}\n```\n以上。')
+  assert.ok(a.verdict.reason.includes('改配置'))
+  assert.equal(a.verdict.correction, '')
+  const b = T.parseVerdict('纠正：用户只让改 A，这一步却动了 B，请把 B 撤回。')
   assert.equal(b.ok, true)
-  assert.equal(b.verdict.correction, '先问用户')
-  const c = T.parseVerdict('{"conform":false,"reason":"含 { 花括号 } 与 \\" 引号","correction":"x"}')
+  assert.equal(b.verdict.conform, false)
+  assert.ok(b.verdict.correction.includes('撤回'))
+  // ② 结论词带 Markdown / 标点装饰也认
+  assert.equal(T.parseVerdict('**纠正**\n越权了。').verdict.conform, false)
+  assert.equal(T.parseVerdict('【通过】理由：一致。').verdict.conform, true)
+  // ③ 否定式正结论不能被「偏离」二字抢先误判
+  assert.equal(T.parseVerdict('这一步没有偏离用户指令，可以做。').verdict.conform, true)
+  assert.equal(T.parseVerdict('无需纠正，与用户要求一致。').verdict.conform, true)
+  // ④ 长句里出现结论词（第一行超过 30 字时退回扫开头）
+  assert.equal(T.parseVerdict('我逐条对照了判据，这一步越过了用户交办的范围，属于偏离，先停下。').verdict.conform, false)
+  // ⑤ 模型自愿给 JSON 照样认（老写法兼容）
+  const c = T.parseVerdict('{"conform":true,"reason":"对得上指令","correction":""}')
   assert.equal(c.ok, true)
-  assert.equal(c.verdict.reason, '含 { 花括号 } 与 " 引号')
-  assert.equal(T.parseVerdict('我觉得没问题').ok, false)
+  assert.equal(c.verdict.conform, true)
+  const d = T.parseVerdict('裁决如下：\n```json\n{"conform":false,"reason":"越权","correction":"先问用户"}\n```\n以上。')
+  assert.equal(d.ok, true)
+  assert.equal(d.verdict.conform, false)
+  assert.equal(d.verdict.correction, '先问用户')
+  const e = T.parseVerdict('{"conform":false,"reason":"含 { 花括号 } 与 \\" 引号","correction":"x"}')
+  assert.equal(e.ok, true)
+  assert.equal(e.verdict.reason, '含 { 花括号 } 与 " 引号')
+  // ⑥ 认不出结论词 / 空回复 → 失败（触发重试，绝不拿模型的话当裁决）
+  assert.equal(T.parseVerdict('嗯，让我先看看这一步做了什么。').ok, false)
+  assert.equal(T.parseVerdict('').ok, false)
   assert.equal(T.parseVerdict('{"reason":"缺 conform"}').ok, false)
 })
 
