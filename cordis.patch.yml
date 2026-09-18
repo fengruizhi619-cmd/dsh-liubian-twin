@@ -1,0 +1,11 @@
+# dsh-liubian-twin bundle 层：向组合挂孪生监察的 Node half
+# （工具闸门 tools/pre-execute / 文本闸门 llm/stream / 监察思考落盘）。
+#
+# 本文件是 **bundle 包内层**，只声明"这个包挂哪些插件 id"。
+# 启停覆盖请写 profile 层（$DSH_HOME/profiles/<name>/cordis.patch.yml），
+# 不要写到这里 —— 产品层不该动，写错层是 bundle 特有的坑。
+#
+# 止血路径：孪生没有独立开关，停用/卸载本插件即停用孪生（记忆注入不受影响）。
+- insert:
+    - id: dsh-liubian-twin
+      name: 'dsh-liubian-twin'

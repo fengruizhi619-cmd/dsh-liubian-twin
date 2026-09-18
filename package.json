@@ -1,0 +1,33 @@
+{
+  "name": "dsh-liubian-twin",
+  "version": "0.1.0",
+  "description": "流变·孪生（DSH 版）：在同一会话里挂一个监察智能体，用会话自己的模型审执行智能体的每一个动作（工具调用 / 准备输出的话），偏离用户指令时当场拦下并给出可直接执行的纠正。与 dsh-liubian 功能上不互通（不引它的代码与数据），只在命名上归流变系列。",
+  "private": true,
+  "type": "module",
+  "main": "./lib/main.mjs",
+  "exports": {
+    ".": "./lib/main.mjs"
+  },
+  "files": [
+    "lib/",
+    "criteria.json",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
+    "cordis": ">=4.0.0-rc <5"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "liubian",
+    "twin",
+    "supervisor"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
