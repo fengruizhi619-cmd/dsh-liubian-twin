@@ -149,4 +149,4 @@ node _dev/twin_review_stats.cjs  # 统计审查记录：通过 / 判偏离，并
 
 ## 许可
 
-MIT
+MIT，见 [LICENSE](./LICENSE)。
