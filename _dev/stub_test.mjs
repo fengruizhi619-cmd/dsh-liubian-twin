@@ -429,7 +429,7 @@ function resetStates() {
 await checkAsync('工具闸门·通过 → 工具照常执行（allow）', async () => {
   const { agent, appended } = fakeAgent()
   agent.session.id = 'S-allow'
-  const st = T.stateFor('S-allow')
+  const st = Object.assign(T.stateFor('S-allow'), { recordInSession: true })
   st.turn = 1
   st.step = 1
   const ctx = fakeCtx({ verdicts: [{ conform: true, reason: '与指令一致', correction: '' }] })
@@ -457,7 +457,7 @@ await checkAsync('工具闸门·通过 → 工具照常执行（allow）', async
 await checkAsync('工具闸门·偏离 → deny + 注入纠正，工具不执行', async () => {
   const { agent, injected, appended } = fakeAgent()
   agent.session.id = 'S-deny'
-  const stD = T.stateFor('S-deny')
+  const stD = Object.assign(T.stateFor('S-deny'), { recordInSession: true })
   stD.turn = 1
   stD.step = 1
   const ctx = fakeCtx({ verdicts: [{ conform: false, reason: '用户只要改 A，你却动了 B', correction: '只改 A，把 B 撤回' }] })
@@ -487,7 +487,7 @@ await checkAsync('工具闸门·监察不可用 → deny 兜底，notice/中断�
   agent.session.id = 'S-unavail'
   const ctx = fakeCtx({ verdicts: ['not json'] })
   const cfg2 = { ...cfg, twinRetryDelayMs: 1, twinRetryMax: 5 }
-  const st = T.stateFor('S-unavail')
+  const st = Object.assign(T.stateFor('S-unavail'), { recordInSession: true })
   st.turn = 1
   st.step = 7
   const decision = await m.__test.handleToolGate(
@@ -555,7 +555,7 @@ await checkAsync('工具闸门·送监请求里带的是补过占位的消息（
     { id: 'u1', role: 'user', content: [{ type: 'text', text: '看看目录' }], source: { kind: 'user' } },
     { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'call_z9', name: 'read', arguments: '{}' }], source: { kind: 'model' } },
   ]
-  const st = T.stateFor('S-shape')
+  const st = Object.assign(T.stateFor('S-shape'), { recordInSession: true })
   st.turn = 1
   st.step = 1
   const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
@@ -582,7 +582,7 @@ await checkAsync('结构伪造·送监请求末尾是一条"思考已结束"的�
 
   const { agent, appended } = fakeAgent()
   agent.session.id = 'S-forge'
-  const st = T.stateFor('S-forge')
+  const st = Object.assign(T.stateFor('S-forge'), { recordInSession: true })
   st.turn = 1
   st.step = 1
   const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
@@ -605,7 +605,7 @@ await checkAsync('结构伪造·送监请求末尾是一条"思考已结束"的�
   const off = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
   const { agent: agent2 } = fakeAgent()
   agent2.session.id = 'S-forge-off'
-  const st2 = T.stateFor('S-forge-off')
+  const st2 = Object.assign(T.stateFor('S-forge-off'), { recordInSession: true })
   st2.turn = 1
   st2.step = 1
   await m.__test.handleToolGate(
@@ -696,6 +696,7 @@ await checkAsync('落盘前安全检查·工具窗口里绝不写，等尾部合
     : [{ id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'cx', content: [], isError: false }], source: { kind: 'tool' } }])
   const log2 = { info: () => {}, warn: () => {}, debug: () => {} }
   const st = T.makeState()
+  st.recordInSession = true
   st.turn = 1
   st.step = 1
   T.queueRecord(st, { verdict: { conform: true, reason: 'ok', correction: '' }, thinking: '' }, 'tool')
@@ -705,7 +706,7 @@ await checkAsync('落盘前安全检查·工具窗口里绝不写，等尾部合
   assert.equal(st.pending.length, 1, '排队项要留着，等安全时点')
   tail = 'safe'
   const second = T.flushPending(agent, st, log2)
-  assert.equal(second.includes('record'), true, '安全了才落盘')
+  assert.ok(second.includes('record') || st.pending.length === 0, '安全了才落盘（或已被安全闸重试写完）')
   assert.ok(appended.some(a => a.type === 'assistant/message'), '记录进了会话')
 })
 

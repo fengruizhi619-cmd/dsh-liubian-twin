@@ -79,7 +79,21 @@ const lines = raw.split('\n').filter(l => l.trim())
 const recs = lines.map(l => { try { return JSON.parse(l) } catch { return null } })
 if (recs.some(r => !r)) throw new Error('有解析不了的行')
 
-const isStray = r => r.type === 'assistant/message' && r.data?.turn === 999 && r.data?.step === 1
+// 判据：**步外助手消息** —— 出现在没有任何 open step 的时刻（宿主的 token meter 会抛
+// "assistant/message at seq … has no matching step/start event"，进而让压缩每次都失败），
+// 以及历史自检留下的 turn=999。
+const openSteps = new Set()
+const straySeqs = new Set()
+for (const r of recs) {
+  const key = `${r.data?.turn}/${r.data?.step}`
+  if (r.type === 'step/start') { openSteps.add(key); continue }
+  if (r.type === 'step/end') { openSteps.delete(key); continue }
+  if (r.type !== 'assistant/message') continue
+  const legacySelfTest = r.data?.turn === 999 && r.data?.step === 1
+  if (legacySelfTest || !openSteps.has(key)) straySeqs.add(r.seq)
+}
+const strayObjs = new Set(recs.filter(r => straySeqs.has(r.seq)))
+const isStray = r => strayObjs.has(r)
 const strayIdx = recs.map((r, i) => (isStray(r) ? i : -1)).filter(i => i >= 0)
 console.log('待删除的 stray 记录:', strayIdx.map(i => '#' + i).join(', ') || '（无）')
 if (!strayIdx.length) { console.log('没有需要修的记录，退出。'); process.exit(0) }
@@ -92,7 +106,7 @@ const outText = outLines.join('\n') + '\n'
 // 自检 1：记录数与 seq
 if (kept.length !== recs.length - strayIdx.length) throw new Error('记录数对不上')
 if (kept.some((r, i) => r.seq !== i)) throw new Error('seq 不连续')
-if (kept.some(isStray)) throw new Error('还有 turn=999 的记录')
+if (kept.some(r => strayObjs.has(r))) throw new Error('还有步外助手消息/自检记录未清干净')
 
 // 自检 2：按宿主规则重投影，检查 tool_calls 配对
 const MSG = new Set(['user/message', 'system/message', 'assistant/message', 'tool/result'])
