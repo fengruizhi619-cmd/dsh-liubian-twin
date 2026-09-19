@@ -772,6 +772,35 @@ await checkAsync('生命周期闸·没有 open step 时绝不往会话里写（t
   assert.equal(appended.length, 0, 'step 已关时 appendTwinRecord 必须自己兜住（记录只进 jsonl）')
 })
 
+await checkAsync('教训块·全局/工作区/空工作区守卫（自流变·记忆移交）', async () => {
+  const os = await import('node:os')
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'twin-lessons-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'lessons.json'), JSON.stringify({ updatedAt: 'x', lessons: ['甲'.repeat(10), '乙'.repeat(10), '丙'.repeat(10)] }), 'utf8')
+    fs.writeFileSync(path.join(dir, 'lessons-测试间.json'), JSON.stringify({ updatedAt: 'x', lessons: ['工作区专属教训一条'] }), 'utf8')
+    const cfg2 = { ...cfg, twinLessonsDir: dir }
+    const g = T.buildLessonsBlock(cfg2, 'global')
+    assert.ok(g.includes('<liubian-lessons scope="全局" n="3">'), '全局块头带条数')
+    assert.ok(g.includes('1. ' + '甲'.repeat(10)) && g.includes('3. ' + '丙'.repeat(10)), '三条齐全')
+    const w = T.buildLessonsBlock(cfg2, 'workspace', '测试间')
+    assert.ok(w.includes('scope="工作区「测试间」"') && w.includes('工作区专属教训一条'), '工作区块')
+    assert.equal(T.buildLessonsBlock(cfg2, 'workspace', ''), '', '空工作区守卫：宁可不发也不复读全局清单')
+    assert.equal(T.buildLessonsBlock(cfg2, 'workspace', '不存在的工作区'), '', '没有该工作区文件 → 空')
+    // 预算截断（预算有 400 下限；单条会被 clipText 剪到 120，用 5 条 150 字必触界）
+    fs.writeFileSync(path.join(dir, 'lessons.json'), JSON.stringify({ updatedAt: 'x', lessons: Array.from({ length: 5 }, () => '甲'.repeat(150)) }), 'utf8')
+    const tight = T.buildLessonsBlock({ ...cfg2, twinLessonsChars: 400 }, 'global')
+    assert.ok(tight.includes('未展示'), '预算不够时给截断提示')
+    const p = T.lessonsFilePath({ twinLessonsDir: '' }, 'global')
+    assert.ok(p.replace(/\\/g, '/').endsWith('/liubian/lessons.json'), '默认目录 = <DSH_HOME>/liubian（交接面）')
+    assert.equal(T.resolveTwinWorkspace({ session: { header: { cwd: 'E:\\DSH_data\\中枢' } } }), '中枢', 'cwd 取末段')
+    assert.equal(T.resolveTwinWorkspace({ session: {} }), '', '没有 header.cwd → 空（只发全局）')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 await checkAsync('工具闸门·内部工具与递归跳过', async () => {
   const { agent } = fakeAgent()
   agent.session.id = 'S-skip'

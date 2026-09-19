@@ -95,7 +95,14 @@
   "twinRecordInSession": false,   // 审查记录是否写进会话（默认只落 jsonl）
   "twinRecordThinking": false,    // 思考全文是否进上下文（默认只留占位标记）
   "twinRecordChars": 1200,        // 开启上面那项时的截断长度
-  "twinUnavailableText": "监察api不可用，请尝试关闭插件或者稍后尝试"
+  "twinUnavailableText": "监察api不可用，请尝试关闭插件或者稍后尝试",
+
+  // 教训注入（数据由流变·记忆的 lessons 工具蒸馏/维护，本插件负责注入）
+  "twinLessonsInject": true,      // 总开关
+  "twinLessonsEveryTurns": 10,    // 每 N 个人类轮次重注一次（0 = 只在会话开始注一次）
+  "twinLessonsMax": 20,           // 单块最多几条
+  "twinLessonsChars": 2400,       // 单块字符预算
+  "twinLessonsDir": ""            // 教训文件目录；空 = ~/.dsh/liubian（交接面，见下节）
 }
 ```
 
@@ -105,9 +112,13 @@
 
 ## 与流变·记忆的边界
 
-`dsh-liubian` 负责记忆，`dsh-liubian-twin` 负责监督，两者**不引对方的代码、不读对方的数据**。监察需要的历史材料（接入卡、教训块、能力卡）本来就作为会话消息存在，从会话里原样取即可，因此没有任何耦合。
+`dsh-liubian` 负责记忆与教训的**生产**，`dsh-liubian-twin` 负责监督与教训的**注入**。两者不引对方的代码；唯一的数据交接面是教训文件：
 
-孪生**没有独立开关**：停用 / 卸载本插件即停用孪生，记忆注入完全不受影响。
+- `~/.dsh/liubian/lessons.json`（全局）与 `lessons-<工作区>.json`（按工作区）由流变·记忆的 `_dsh_external_dsh_liubian_lessons` 工具蒸馏 / 手工维护（从记忆库检索蒸馏，这是记忆系统的职责）；
+- 孪生在会话开始注入一次、之后每 `twinLessonsEveryTurns` 个人类轮次重注一次，**只读**这些文件，块格式与流变·记忆时代逐字一致（模型侧无感）；
+- 除这一交接面外，监察需要的历史材料（接入卡、能力卡）本来就作为会话消息存在，从会话里原样取即可。
+
+孪生**没有独立开关**：停用 / 卸载本插件即停用孪生，记忆注入完全不受影响（教训注入会随孪生一起停）。
 
 ## 它实际抓到了什么（实测）
 
