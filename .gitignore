@@ -6,3 +6,6 @@ _dev/commitmsg3.txt
 _dev/commitmsg4.txt
 _dev/ctx/
 _dev/hf/
+.idea/
+__pycache__/
+_dev/commitmsg*.txt

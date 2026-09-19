@@ -1,1 +1,0 @@
-﻿chore: 打开/关闭脚本 enable_twin.cjs（带备份）＋已在 profile 里打开孪生

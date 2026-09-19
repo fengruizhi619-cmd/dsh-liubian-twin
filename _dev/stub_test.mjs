@@ -4,7 +4,7 @@
  *   node _dev/stub_test.mjs
  *
  * 覆盖（对应实施方案 §9 的纯函数/桩级验证）：
- *   1. 判据载入与送监指令拼装（44 条、不写来源、role/contract/usage 都在）
+ *   1. 判据载入与送监指令拼装（45 条、不写来源、role/contract/usage 都在）
  *   2. 裁决解析（裸 JSON / 围栏 / 前后夹话 / 非法）
  *   3. 闸门触发规则（链首 / 次数间隔 / 时间间隔 / 预算 / 未解决出口 / 回合重置）
  *   4. 文本闸门流的五条契约（通过 / 否决 / 不可用 / 中止 / 纯工具步）
@@ -42,9 +42,9 @@ async function checkAsync(name, fn) {
 const cfg = { ...T.DEFAULTS }
 const criteria = T.loadCriteria(cfg)
 
-check('判据文件可载入且是 44 条', () => {
+check('判据文件可载入且是 45 条', () => {
   assert.equal(criteria.ok, true, criteria.error)
-  assert.equal(criteria.doc.items.length, 44)
+  assert.equal(criteria.doc.items.length, 45)
   assert.ok(criteria.path.endsWith('criteria.json'))
 })
 
@@ -62,7 +62,7 @@ check('输出契约不强制 JSON：用普通话结论词（通过／纠正）',
   assert.ok(criteria.doc.role.includes('第一行只写「通过」或「纠正」'), 'role 里也要写清结论词')
 })
 
-check('送监指令含 role / usage / 全部 44 条 / 契约 / 待审对象 / 用户原话', () => {
+check('送监指令含 role / usage / 全部 45 条 / 契约 / 待审对象 / 用户原话', () => {
   const text = T.buildInstruction(criteria.doc, T.describeTarget('text', { text: '我打算删掉这个文件' }), {
     turn: 3,
     step: 2,
@@ -725,6 +725,51 @@ await checkAsync('监察记录永远带 reasoning 块（思考模式硬约束）
   assert.equal(rec.data.message.content[1].type, 'text')
   const forged = T.forgedAssistantMessage({ twinForgeReasoning: '', twinForgeContent: '' }, 'p', 'm')
   assert.deepEqual(forged.content.map(b => b.type), ['reasoning'], '伪造尾兜底也必须是 reasoning 块')
+})
+
+await checkAsync('生命周期闸·没有 open step 时绝不往会话里写（token meter 的硬约束）', async () => {
+  // 会话事件流：一条 step/start 后 step/end → 此刻没有 open step
+  const withEvents = evs => ({ id: 'S-step', snapshotEvents: () => evs })
+  assert.equal(T.sessionStep(withEvents([
+    { type: 'turn/start', data: { turn: 1 } },
+    { type: 'step/start', data: { turn: 1, step: 1 } },
+    { type: 'step/end', data: { turn: 1, step: 1 } },
+  ])), false, 'step/end 之后没有 open step')
+  assert.equal(T.sessionStep(withEvents([
+    { type: 'turn/start', data: { turn: 1 } },
+    { type: 'step/start', data: { turn: 1, step: 1 } },
+  ])), true, 'step/start 之后有 open step')
+  assert.equal(T.sessionStep(withEvents([
+    { type: 'step/start', data: { turn: 1, step: 1 } },
+    { type: 'step/end', data: { turn: 1, step: 1 } },
+    { type: 'step/start', data: { turn: 1, step: 2 } },
+  ])), true, '进入新一步后又是 open')
+  assert.equal(T.sessionStep({ id: 'S-noapi' }), null, '问不到就不表态（交回快照判据）')
+
+  // 尾部线格式完全合法，但 step 已关 → 依然不许写
+  const pairedTail = [
+    { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'cx', name: 'read', arguments: '{}' }], source: { kind: 'model' } },
+    { id: 't1', role: 'user', content: [{ type: 'tool-result', toolCallId: 'cx', content: [], isError: false }], source: { kind: 'tool' } },
+  ]
+  const closed = { session: { id: 'S-step2', deriveMessages: () => pairedTail, snapshotEvents: () => [{ type: 'step/end', data: { turn: 1, step: 1 } }] } }
+  assert.equal(T.tailIsWritable(closed), false, 'step 关了就是不许写（哪怕线格式合法）')
+  const open = { session: { id: 'S-step3', deriveMessages: () => pairedTail, snapshotEvents: () => [{ type: 'step/start', data: { turn: 1, step: 1 } }] } }
+  assert.equal(T.tailIsWritable(open), true, '有 open step 且线格式合法 → 允许写')
+
+  // 直接调 appendTwinRecord（快照还写着 turn/step，但 step 已经关了）→ 一个字节都不许进会话
+  const appended = []
+  const agent = {
+    session: {
+      id: 'S-step4',
+      snapshotEvents: () => [{ type: 'step/end', data: { turn: 1, step: 1 } }],
+      append: (type, data, opts) => { appended.push({ type, data, opts }); return { seq: appended.length } },
+    },
+  }
+  const st = T.makeState()
+  st.turn = 1
+  st.step = 1
+  T.appendTwinRecord(agent, st, { verdict: { conform: true, reason: 'ok', correction: '' }, thinking: '' }, { kind: 'tool', inSession: true })
+  assert.equal(appended.length, 0, 'step 已关时 appendTwinRecord 必须自己兜住（记录只进 jsonl）')
 })
 
 await checkAsync('工具闸门·内部工具与递归跳过', async () => {
