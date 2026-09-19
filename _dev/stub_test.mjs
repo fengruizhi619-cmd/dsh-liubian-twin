@@ -772,7 +772,7 @@ await checkAsync('生命周期闸·没有 open step 时绝不往会话里写（t
   assert.equal(appended.length, 0, 'step 已关时 appendTwinRecord 必须自己兜住（记录只进 jsonl）')
 })
 
-await checkAsync('教训块·全局/工作区/空工作区守卫（自流变·记忆移交）', async () => {
+await checkAsync('教训·作为审查材料（不注入执行侧，附进监察指令）', async () => {
   const os = await import('node:os')
   const fs = await import('node:fs')
   const path = await import('node:path')
@@ -781,21 +781,51 @@ await checkAsync('教训块·全局/工作区/空工作区守卫（自流变·�
     fs.writeFileSync(path.join(dir, 'lessons.json'), JSON.stringify({ updatedAt: 'x', lessons: ['甲'.repeat(10), '乙'.repeat(10), '丙'.repeat(10)] }), 'utf8')
     fs.writeFileSync(path.join(dir, 'lessons-测试间.json'), JSON.stringify({ updatedAt: 'x', lessons: ['工作区专属教训一条'] }), 'utf8')
     const cfg2 = { ...cfg, twinLessonsDir: dir }
-    const g = T.buildLessonsBlock(cfg2, 'global')
-    assert.ok(g.includes('<liubian-lessons scope="全局" n="3">'), '全局块头带条数')
-    assert.ok(g.includes('1. ' + '甲'.repeat(10)) && g.includes('3. ' + '丙'.repeat(10)), '三条齐全')
-    const w = T.buildLessonsBlock(cfg2, 'workspace', '测试间')
-    assert.ok(w.includes('scope="工作区「测试间」"') && w.includes('工作区专属教训一条'), '工作区块')
-    assert.equal(T.buildLessonsBlock(cfg2, 'workspace', ''), '', '空工作区守卫：宁可不发也不复读全局清单')
-    assert.equal(T.buildLessonsBlock(cfg2, 'workspace', '不存在的工作区'), '', '没有该工作区文件 → 空')
-    // 预算截断（预算有 400 下限；单条会被 clipText 剪到 120，用 5 条 150 字必触界）
+    const agent = { session: { header: { cwd: 'E:\\DSH_data\\测试间' } } }
+    const t = T.lessonsReviewText(cfg2, agent)
+    assert.ok(t.includes('【全局教训】') && t.includes('1. ' + '甲'.repeat(10)), '全局组')
+    assert.ok(t.includes('【工作区「测试间」教训】') && t.includes('工作区专属教训一条'), '工作区组')
+    assert.ok(t.includes('点名第几条'), '带对照规则说明')
+    const gOnly = T.lessonsReviewText(cfg2, { session: {} })
+    assert.ok(gOnly.includes('【全局教训】') && !gOnly.includes('工作区「'), '拿不到工作区时只对照全局')
+    // 预算截断（预算有 400 下限，单条剪到 120：5 条 150 字必截）
     fs.writeFileSync(path.join(dir, 'lessons.json'), JSON.stringify({ updatedAt: 'x', lessons: Array.from({ length: 5 }, () => '甲'.repeat(150)) }), 'utf8')
-    const tight = T.buildLessonsBlock({ ...cfg2, twinLessonsChars: 400 }, 'global')
-    assert.ok(tight.includes('未展示'), '预算不够时给截断提示')
+    const tight = T.lessonsReviewText({ ...cfg2, twinLessonsChars: 400 }, agent)
+    assert.ok(!tight.includes('5. '), '超出预算的条目不进清单')
+    // 路径解析与工作区解析
     const p = T.lessonsFilePath({ twinLessonsDir: '' }, 'global')
     assert.ok(p.replace(/\\/g, '/').endsWith('/liubian/lessons.json'), '默认目录 = <DSH_HOME>/liubian（交接面）')
     assert.equal(T.resolveTwinWorkspace({ session: { header: { cwd: 'E:\\DSH_data\\中枢' } } }), '中枢', 'cwd 取末段')
-    assert.equal(T.resolveTwinWorkspace({ session: {} }), '', '没有 header.cwd → 空（只发全局）')
+    assert.equal(T.resolveTwinWorkspace({ session: {} }), '', '没有 header.cwd → 空')
+    // 指令集成：buildInstruction 渲染教训节
+    const ins = T.buildInstruction(criteria.doc, '待审动作文本', { lessonsText: t, userInstruction: '把 A 改成 B' })
+    assert.ok(ins.includes('### 通用教训（对照参考') && ins.includes('【全局教训】'), '指令里出现教训节')
+    const ins2 = T.buildInstruction(criteria.doc, '待审动作文本', { lessonsText: '', userInstruction: '把 A 改成 B' })
+    assert.ok(!ins2.includes('通用教训'), '空教训文本不渲染该节')
+    // 总开关（真链路）：关掉后送监指令里不出现教训节
+    const runCall = async (flag) => {
+      const sent = []
+      const a2 = {
+        session: {
+          id: 'S-lessons-' + String(flag),
+          requestContext: () => ({ provider: 'p', model: 'm' }),
+          header: { cwd: 'E:\\DSH_data\\测试间' },
+          deriveMessages: () => [{ id: 'u1', role: 'user', content: [{ type: 'text', text: '把 A 改成 B' }], source: { kind: 'user' } }],
+        },
+      }
+      const c2 = {
+        logger: { info() {}, warn() {}, debug() {} },
+        llm: { stream(options) { sent.push(options.messages); return (async function* () { yield { type: 'finish', reason: { kind: 'stop' } } })() } },
+        agents: { get: () => a2 },
+      }
+      await T.handleToolGate(c2, { ...cfg2, twinRetryDelayMs: 1, twinRetryMax: 1, twinReviewLessons: flag, twinIdleTimeoutMs: 100 },
+        { name: 'read', arguments: '{}', agent: a2, signal: new AbortController().signal }, async () => ({ kind: 'allow' }), c2.logger)
+      return JSON.stringify(sent[0] || [])
+    }
+    const on = await runCall(true)
+    assert.ok(on.includes('通用教训') && on.includes('【全局教训】'), '默认开：送监指令带教训节')
+    const off = await runCall(false)
+    assert.ok(!off.includes('通用教训'), '关掉：送监指令不带教训节')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
