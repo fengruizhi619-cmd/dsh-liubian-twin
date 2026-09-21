@@ -13,6 +13,8 @@
  */
 import assert from 'node:assert/strict'
 
+try { console.log('[探针] RESOLVE =', import.meta.resolve('@deepseek-ai/dsh-tools')) } catch (e) { console.log('[探针] RESOLVE FAIL:', e.code) }
+
 const implPath = new URL('../lib/impl.mjs', import.meta.url).href
 const m = await import(implPath)
 const { __test: T } = m
@@ -185,6 +187,19 @@ check('预算用尽 → 静默跳过；回合重置恢复', () => {
   assert.equal(T.shouldReview(st3, c, 'text').why, 'budget')
   T.resetTurn(st3, 2)
   assert.equal(T.shouldReview(st3, c, 'text').review, true)
+})
+
+check('预算 <=0 = 不限（默认取消上限）', () => {
+  for (const limit of [0, -1]) {
+    const st = T.makeState()
+    const c = { ...cfg, twinMaxReviewsPerTurn: limit, twinGapCalls: 1 }
+    for (let i = 0; i < 30; i++) {
+      const d = T.shouldReview(st, c, 'tool')
+      assert.notEqual(d.why, 'budget')
+      T.markReviewed(st)
+    }
+    assert.equal(st.budget, 30, '预算计数器照常记账')
+  }
 })
 
 check('未解决出口：标记后不再审', () => {
