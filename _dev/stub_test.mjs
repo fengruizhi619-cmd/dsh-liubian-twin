@@ -633,6 +633,53 @@ await checkAsync('结构伪造·送监请求末尾是一条"思考已结束"的�
   assert.equal(sent2[sent2.length - 1].role, 'user', 'twinForge=false 时末尾回到监察指令')
 })
 
+await checkAsync('结构伪造·默认配置即含 JSON 前缀（空回复兜底）', async () => {
+  assert.equal(T.DEFAULTS.twinForgeContent, '{"conform":')
+  const forged = T.forgedAssistantMessage(T.DEFAULTS, 'p', 'm')
+  assert.equal(forged.role, 'assistant')
+  assert.equal(forged.content[0].type, 'reasoning', '思考块在前（thinking 模式硬约束）')
+  const textBlock = forged.content.find(b => b && b.type === 'text')
+  assert.ok(textBlock, '默认伪造消息应带正文块')
+  assert.equal(textBlock.text, '{"conform":', '正文是 JSON 开头')
+})
+
+await checkAsync('结构伪造·模型只补 JSON 尾巴（前缀续写）也能拼出裁决', async () => {
+  const { agent, appended } = fakeAgent()
+  agent.session.id = 'S-forge-json'
+  const st = Object.assign(T.stateFor('S-forge-json'), { recordInSession: true })
+  st.turn = 1
+  st.step = 1
+  // 模型续写只给尾巴：没有 `{`，单看回复解析不出裁决
+  const ctx = fakeCtx({ verdicts: [' true, "reason": "与指令一致", "correction": ""}'] })
+  let ran = false
+  await m.__test.handleToolGate(
+    ctx, { ...cfg, twinRetryDelayMs: 1 },
+    { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_j1' },
+    async () => { ran = true; return { kind: 'allow' } },
+    ctx.logger,
+  )
+  assert.equal(ran, true, '拼出 conform 裁决 → 工具应放行（而不是 5 次重试后判不可用）')
+  assert.equal(ctx.calls.length, 1, '一次调用就该成功，不该烧重试')
+  const sent = ctx.messages[0]
+  const tail = sent[sent.length - 1]
+  assert.equal(tail.role, 'assistant', '末尾是伪造助手消息')
+  const textBlock = tail.content.find(b => b && b.type === 'text')
+  assert.ok(textBlock && textBlock.text.trim().startsWith('{"conform":'), '伪造正文带 JSON 开头')
+  T.flushPending(agent, st, ctx.logger)
+  const rec = appended.find(a => a.type === 'assistant/message')
+  assert.ok(rec, '应有监察记录')
+  assert.ok(rec.data.message.content.some(b => b.type === 'text' && b.text.includes('〔监察〕通过')), '拼出的裁决判为通过')
+})
+
+await checkAsync('结构伪造·模型无视前缀自己写完整 JSON 时前缀拼接不得误判', async () => {
+  // 模型不理前缀、自己给了完整 JSON（raw 里就有 `{`）→ 裸解析就成功，前缀路径不应介入
+  const parsed1 = T.parseVerdict('{"conform": false, "reason": "r", "correction": "c"}')
+  assert.ok(parsed1.ok && parsed1.verdict.conform === false)
+  // 模型回闲聊（无 JSON、无结论词）→ 前缀拼接也救不了，仍应报错进重试
+  const bad = T.parseVerdict('需要我补判断依据或修正的话，请直接说。')
+  assert.equal(bad.ok, false)
+})
+
 await checkAsync('上下文清洗·特殊标识符被清掉，拍平成普通文本', () => {
   const BAR = String.fromCharCode(0xff5c)
   const SEP = String.fromCharCode(0x2581)
