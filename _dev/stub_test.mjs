@@ -86,12 +86,38 @@ check('用户原话定位：跳过插件注入块与监察指令本身', () => {
   const messages = [
     { id: '1', role: 'system', content: [{ type: 'text', text: '系统提示' }], source: { kind: 'plugin', plugin: 'x' } },
     { id: '2', role: 'user', content: [{ type: 'text', text: '<liubian-capabilities>…</liubian-capabilities>' }], source: { kind: 'plugin', plugin: 'dsh-liubian', form: 'catalog' } },
+    { id: '2v', role: 'user', content: [{ type: 'text', text: '<liubian-context source="profile">v4 形态的注入块</liubian-context>' }], source: { kind: 'plugin:dsh-liubian', form: 'catalog' } },
     { id: '3', role: 'user', content: [{ type: 'text', text: '真正的用户指令：把 config.json 的 gap 改成 12' }], source: { kind: 'user' } },
     { id: '4', role: 'assistant', content: [{ type: 'text', text: '好的' }], source: { kind: 'model', provider: 'p', model: 'm' } },
     { id: '5', role: 'user', content: [{ type: 'text', text: '本轮监察指令（不该被当成用户原话）' }], source: { kind: 'plugin', plugin: 'dsh-liubian-twin', form: 'instructions' } },
+    { id: '5v', role: 'user', content: [{ type: 'text', text: 'v4 形态的监察指令（也不该被当成用户原话）' }], source: { kind: 'plugin:dsh-liubian-twin', form: 'instructions' } },
   ]
   assert.equal(T.lastUserInstruction(messages), '真正的用户指令：把 config.json 的 gap 改成 12')
-  assert.equal(T.lastUserInstruction([messages[0], messages[4]]), '')
+  assert.equal(T.lastUserInstruction([messages[0], messages[4], messages[6]]), '')
+})
+
+check('v4 会话格式：插件消息必须写 producer-owned kind（plugin:<包名>），不再写裸 plugin', () => {
+  // 写入侧：userMessage 产出的 source 必须是 'plugin:dsh-liubian-twin'
+  const notice = T.userMessage('监察api不可用，请稍候', 'notice', '监察不可用')
+  assert.equal(notice.id && typeof notice.id, 'string', 'id 非空字符串（冷读硬要求）')
+  assert.equal(notice.role, 'user')
+  assert.equal(notice.source.kind, 'plugin:dsh-liubian-twin', 'kind = plugin:<包名>（v4 拒收裸 plugin）')
+  assert.equal(notice.source.plugin, undefined, '不再带 plugin 字段（迁移后规范形态）')
+  assert.equal(notice.source.form, 'notice')
+  assert.equal(notice.source.summary, '监察不可用', 'notice 必须带 summary')
+  const plain = T.userMessage('一段普通指令', 'instructions')
+  assert.equal(plain.source.kind, 'plugin:dsh-liubian-twin')
+  assert.equal(plain.source.form, 'instructions')
+  assert.equal(plain.source.summary, undefined, '非 notice 不带 summary')
+  // 读取侧：flattenTranscript 把新旧两种插件形态都排除在监察转录之外
+  const flat = T.flattenTranscript([
+    { id: 'a', role: 'user', content: [{ type: 'text', text: '用户说的' }], source: { kind: 'user' } },
+    { id: 'b', role: 'user', content: [{ type: 'text', text: '旧形态注入' }], source: { kind: 'plugin', plugin: 'dsh-liubian' } },
+    { id: 'c', role: 'user', content: [{ type: 'text', text: 'v4 形态注入' }], source: { kind: 'plugin:dsh-liubian' } },
+  ], { twinTranscriptRounds: 10 })
+  assert.equal(flat.includes('用户说的'), true)
+  assert.equal(flat.includes('旧形态注入'), false, 'legacy kind=plugin 不进转录')
+  assert.equal(flat.includes('v4 形态注入'), false, 'v4 kind=plugin:* 不进转录')
 })
 
 /* ── 2. 裁决解析 ───────────────────────────────────────────────────────── */
