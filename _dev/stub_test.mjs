@@ -188,6 +188,42 @@ await checkAsync('provider 兜底·无 requestContext 时用 llm/stream 记账�
   assert.ok(dbg2.error.includes('requestContext'))
 })
 
+await checkAsync('转录上限·超大拍平转录保尾截断（39 万字实测教训）', () => {
+  const big = Array.from({ length: 30 }, (_, i) => ({
+    id: 'b' + i, role: i % 2 ? 'assistant' : 'user',
+    content: [{ type: 'text', text: '第' + i + '条消息' + '甲'.repeat(2000) }],
+    source: { kind: i % 2 ? 'model' : 'user' },
+  }))
+  const out = T.contextTextFor(big, { ...cfg, twinTranscriptMaxChars: 5000 })
+  assert.ok(out.length <= 5000 + 120, '截断后不超上限（含一行说明）')
+  assert.ok(out.includes('twinTranscriptMaxChars'), '有截断说明')
+  assert.ok(out.includes('第29条消息') || out.includes('第28条消息'), '保留的是最近的尾巴')
+  assert.equal(out.includes('第0条消息'), false, '最早的内容被截掉')
+  // 上限 0 = 不截断
+  const uncapped = T.contextTextFor(big, { ...cfg, twinTranscriptMaxChars: 0 })
+  assert.ok(uncapped.length > 5000, '0 = 关闭上限')
+})
+
+await checkAsync('429 退避·限流错误时重试间隔四倍', () => {
+  assert.equal(m.pickRetryDelayMs('HTTP 429 too many requests', { twinRetryDelayMs: 5000 }), 20000)
+  assert.equal(m.pickRetryDelayMs('rate limit hit', { twinRetryDelayMs: 5000 }), 20000)
+  assert.equal(m.pickRetryDelayMs('空回复（分块类型：usage/finish）', { twinRetryDelayMs: 5000 }), 5000)
+})
+
+await checkAsync('并发互斥·已有监察在途时第二个调用直接 skip', async () => {
+  const slowCtx = {
+    logger: { info() {}, warn() {}, debug() {} },
+    llm: { stream() { return (async function* () { await new Promise(r => setTimeout(r, 400)); yield { type: 'text-delta', index: 0, text: '通过' }; yield { type: 'finish', reason: { kind: 'stop' } } })() } },
+  }
+  const { agent } = fakeAgent()
+  agent.session.id = 'S-mutex'
+  const p1 = m.callTwin(slowCtx, { ...cfg, twinRetryDelayMs: 1 }, agent, { kind: 'tool', targetDesc: 'x' })
+  const p2 = m.callTwin(slowCtx, { ...cfg, twinRetryDelayMs: 1 }, agent, { kind: 'tool', targetDesc: 'x' })
+  const [r1, r2] = await Promise.all([p1, p2])
+  const statuses = [r1.status, r2.status].sort()
+  assert.deepEqual(statuses, ['conform', 'skipped'], '一个在途执行，另一个 skip 不并发打 provider')
+})
+
 await checkAsync('后台会话·只记录不拦截：deny 照记 jsonl、正文原样放行', async () => {
   const st = T.stateFor('S-bg-obs')
   st.lastProvider = 'p'
