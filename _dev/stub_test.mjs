@@ -120,6 +120,122 @@ check('v4 会话格式：插件消息必须写 producer-owned kind（plugin:<包
   assert.equal(flat.includes('v4 形态注入'), false, 'v4 kind=plugin:* 不进转录')
 })
 
+await checkAsync('降级·连续 3 个回合不可用后工具从 deny 变为放行', async () => {
+  const { agent } = fakeAgent()
+  agent.session.id = 'S-degrade'
+  const st = Object.assign(T.stateFor('S-degrade'), { recordInSession: true })
+  const runTurn = async (turn) => {
+    T.resetTurn(st, turn)
+    st.turn = turn
+    st.step = 1
+    const ctx = fakeCtx({ verdicts: [''], thinking: '' }) // 全空流 → 空回复 → 5 次重试 → 不可用
+    let ran = false
+    await m.__test.handleToolGate(
+      ctx, { ...cfg, twinRetryDelayMs: 1 },
+      { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_d' + turn },
+      async () => { ran = true; return { kind: 'allow' } },
+      ctx.logger,
+    )
+    return ran
+  }
+  assert.equal(await runTurn(1), false, '第 1 回合不可用 → deny')
+  assert.equal(await runTurn(2), false, '第 2 回合不可用 → 仍 deny（阈值=2）')
+  assert.equal(await runTurn(3), true, '第 3 回合不可用 → 降级放行')
+  assert.equal(st.degradedTurn, true)
+  assert.equal(st.unavailTurns, 3)
+})
+
+await checkAsync('降级·成功裁决立即收严', async () => {
+  const { agent } = fakeAgent()
+  agent.session.id = 'S-recover'
+  const st = Object.assign(T.stateFor('S-recover'), { recordInSession: true })
+  st.unavailTurns = 5
+  // 回合 1：监察恢复（成功裁决）→ 计数归零
+  T.resetTurn(st, 1); st.turn = 1; st.step = 1
+  const okCtx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
+  let ran1 = false
+  await m.__test.handleToolGate(okCtx, { ...cfg, twinRetryDelayMs: 1 },
+    { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_r1' },
+    async () => { ran1 = true; return { kind: 'allow' } }, okCtx.logger)
+  assert.equal(ran1, true)
+  assert.equal(st.unavailTurns, 0, '成功即归零')
+  // 回合 2：监察再次不可用 → 重新从 1 数起 → 仍 deny（不立即降级）
+  T.resetTurn(st, 2); st.turn = 2; st.step = 1
+  const failCtx = fakeCtx({ verdicts: [''], thinking: '' })
+  let ran2 = false
+  await m.__test.handleToolGate(failCtx, { ...cfg, twinRetryDelayMs: 1 },
+    { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_r2' },
+    async () => { ran2 = true; return { kind: 'allow' } }, failCtx.logger)
+  assert.equal(ran2, false, '重新计数后第 1 回合不可用仍 deny')
+  assert.equal(st.unavailTurns, 1)
+})
+
+await checkAsync('provider 兜底·无 requestContext 时用 llm/stream 记账的模型', async () => {
+  const st = T.stateFor('S-fallback')
+  st.lastProvider = 'p-cache'
+  st.lastModel = 'm-cache'
+  const agent = {
+    session: { id: 'S-fallback', requestContext: () => null, deriveMessages: () => [] },
+  }
+  const dbg = await m.callTwin({ llm: {} }, { ...cfg }, agent, { kind: 'debug' })
+  assert.equal(dbg.error, '', '有兜底就不该被 provider 关拦下')
+  assert.equal(dbg.messageCount, 2, '指令 + 伪造尾（走到了拼装阶段）')
+  // 无兜底 → 仍是 requestContext 错误
+  T.stateFor('S-fallback-none')
+  const agent2 = { session: { id: 'S-fallback-none', requestContext: () => null, deriveMessages: () => [] } }
+  const dbg2 = await m.callTwin({}, { ...cfg }, agent2, { kind: 'debug' })
+  assert.equal(dbg2.status, 'skipped')
+  assert.ok(dbg2.error.includes('requestContext'))
+})
+
+await checkAsync('后台会话·只记录不拦截：deny 照记 jsonl、正文原样放行', async () => {
+  const st = T.stateFor('S-bg-obs')
+  st.lastProvider = 'p'
+  st.lastModel = 'm'
+  const upstream = (async function* () {
+    yield { type: 'text-delta', index: 0, text: '正文照常' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  })()
+  const ctx = fakeCtx({ verdicts: [{ conform: false, reason: 'r', correction: 'c' }] })
+  const gated = T.observeOnlyTextGate({
+    ctx, cfg: { ...cfg, twinRetryDelayMs: 1 }, st,
+    options: { sessionId: 'S-bg-obs' },
+    next: () => upstream,
+    log: ctx.logger,
+  })
+  const chunks = []
+  for await (const c of gated) chunks.push(c)
+  const out = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
+  assert.equal(out, '正文照常', 'deny 也放行正文（后台没有拦截通道）')
+  const fs = await import('node:fs')
+  const lines = fs.readFileSync(m.sessionFile('S-bg-obs'), 'utf8').trim().split('\n')
+  const last = JSON.parse(lines[lines.length - 1])
+  assert.equal(last.verdict.conform, false, 'deny 裁决进了 jsonl')
+  assert.equal(last.model, 'm', '记录带模型（shim requestContext 用缓存兜底）')
+})
+
+await checkAsync('后台会话·监察不可用时静默放行（不附申明）', async () => {
+  const st = T.stateFor('S-bg-unavail')
+  st.lastProvider = 'p'
+  st.lastModel = 'm'
+  const upstream = (async function* () {
+    yield { type: 'text-delta', index: 0, text: '后台正文' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  })()
+  const ctx = fakeCtx({ verdicts: [''], thinking: '' })
+  const gated = T.observeOnlyTextGate({
+    ctx, cfg: { ...cfg, twinRetryDelayMs: 1 }, st,
+    options: { sessionId: 'S-bg-unavail' },
+    next: () => upstream,
+    log: ctx.logger,
+  })
+  const chunks = []
+  for await (const c of gated) chunks.push(c)
+  const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
+  assert.equal(text, '后台正文', '不可用时正文原样放行')
+  assert.equal(text.includes('监察'), false, '不附加固定申明（后台模式静默）')
+})
+
 /* ── 2. 裁决解析 ───────────────────────────────────────────────────────── */
 
 check('裁决解析：普通话结论词为主，JSON 也认，认不出才算失败', () => {
@@ -659,27 +775,25 @@ await checkAsync('结构伪造·送监请求末尾是一条"思考已结束"的�
   assert.equal(sent2[sent2.length - 1].role, 'user', 'twinForge=false 时末尾回到监察指令')
 })
 
-await checkAsync('结构伪造·默认配置即含 JSON 前缀（空回复兜底）', async () => {
-  assert.equal(T.DEFAULTS.twinForgeContent, '{"conform":')
+await checkAsync('结构伪造·正文默认为空（JSON 前缀方案生产证伪后回退）', async () => {
+  assert.equal(T.DEFAULTS.twinForgeContent, '', '2026-09-26 实测：前缀上线后成功率从约一半跌到 0%，默认回退为空')
   const forged = T.forgedAssistantMessage(T.DEFAULTS, 'p', 'm')
   assert.equal(forged.role, 'assistant')
   assert.equal(forged.content[0].type, 'reasoning', '思考块在前（thinking 模式硬约束）')
-  const textBlock = forged.content.find(b => b && b.type === 'text')
-  assert.ok(textBlock, '默认伪造消息应带正文块')
-  assert.equal(textBlock.text, '{"conform":', '正文是 JSON 开头')
+  assert.equal(forged.content.some(b => b && b.type === 'text'), false, '默认不带正文块')
 })
 
-await checkAsync('结构伪造·模型只补 JSON 尾巴（前缀续写）也能拼出裁决', async () => {
+await checkAsync('结构伪造·模型只补 JSON 尾巴（显式开前缀时）也能拼出裁决', async () => {
   const { agent, appended } = fakeAgent()
   agent.session.id = 'S-forge-json'
   const st = Object.assign(T.stateFor('S-forge-json'), { recordInSession: true })
   st.turn = 1
   st.step = 1
-  // 模型续写只给尾巴：没有 `{`，单看回复解析不出裁决
+  // 显式开前缀（配置项仍可用），模型续写只给尾巴：没有 `{`，单看回复解析不出裁决
   const ctx = fakeCtx({ verdicts: [' true, "reason": "与指令一致", "correction": ""}'] })
   let ran = false
   await m.__test.handleToolGate(
-    ctx, { ...cfg, twinRetryDelayMs: 1 },
+    ctx, { ...cfg, twinForgeContent: '{"conform":', twinRetryDelayMs: 1 },
     { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_j1' },
     async () => { ran = true; return { kind: 'allow' } },
     ctx.logger,
