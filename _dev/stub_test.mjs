@@ -224,6 +224,56 @@ await checkAsync('并发互斥·已有监察在途时第二个调用直接 skip'
   assert.deepEqual(statuses, ['conform', 'skipped'], '一个在途执行，另一个 skip 不并发打 provider')
 })
 
+await checkAsync('被炉白名单·白名单工具直接放行且本回合转聊天直通', async () => {
+  const { agent } = fakeAgent()
+  agent.session.id = 'S-kotatsu'
+  const st = Object.assign(T.stateFor('S-kotatsu'), { recordInSession: true })
+  T.resetTurn(st, 1); st.turn = 1; st.step = 1
+  const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
+  let ran = false
+  await m.__test.handleToolGate(ctx, { ...cfg },
+    { name: '_dsh_external_dsh_liubian_kotatsu_send', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_k1' },
+    async () => { ran = true; return { kind: 'allow' } },
+    ctx.logger)
+  assert.equal(ran, true, '白名单工具直接放行')
+  assert.equal(ctx.calls.length, 0, '不消耗监察调用')
+  assert.equal(st.kotatsuTurn, true, '本回合标成聊天直通')
+  assert.equal(T.evaluateGate(st, cfg, 'text', Date.now(), 99, 'tool').why, 'kotatsu-bypass', '同回合文本也不审')
+})
+
+await checkAsync('被炉白名单·非白名单工具照常审查，flag 不误设', async () => {
+  const { agent } = fakeAgent()
+  agent.session.id = 'S-kotatsu2'
+  const st = Object.assign(T.stateFor('S-kotatsu2'), { recordInSession: true })
+  T.resetTurn(st, 1); st.turn = 1; st.step = 1
+  const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
+  let ran = false
+  await m.__test.handleToolGate(ctx, { ...cfg, twinRetryDelayMs: 1 },
+    { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_k2' },
+    async () => { ran = true; return { kind: 'allow' } },
+    ctx.logger)
+  assert.equal(ran, true)
+  assert.equal(ctx.calls.length, 1, '非白名单工具照常审查')
+  assert.equal(st.kotatsuTurn, false)
+})
+
+check('被炉白名单·前缀匹配/总开关/投递块识别/回合重置', () => {
+  assert.equal(m.chatBypassTool('_dsh_external_dsh_liubian_kotatsu_send', cfg), true)
+  assert.equal(m.chatBypassTool('_dsh_external_dsh_liubian_kotatsu_join', cfg), true)
+  assert.equal(m.chatBypassTool('read', cfg), false)
+  assert.equal(m.chatBypassTool('_dsh_external_dsh_liubian_kotatsu_send', { ...cfg, twinChatBypass: false }), false, '总开关关闭')
+  const mkMsg = text => ({ id: 'x', role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+  const deliver = mkMsg('<kotatsu room="圆桌" deliver="wake:1">\n…\n</kotatsu>')
+  assert.equal(m.kotatsuTriggerIn([mkMsg('普通消息'), deliver]), true, '投递块在末尾 → 被炉回合')
+  const old = mkMsg('<kotatsu room="圆桌">旧投递')
+  assert.equal(m.kotatsuTriggerIn([old, mkMsg('a'), mkMsg('b'), mkMsg('c'), mkMsg('d')]), false, '历史深处的旧投递不触发')
+  assert.equal(m.kotatsuTriggerIn([mkMsg('a')]), false)
+  const st = T.stateFor('S-kotatsu-reset')
+  st.kotatsuTurn = true
+  T.resetTurn(st, 'next')
+  assert.equal(st.kotatsuTurn, false, 'resetTurn 清直通标记')
+})
+
 await checkAsync('后台会话·只记录不拦截：deny 照记 jsonl、正文原样放行', async () => {
   const st = T.stateFor('S-bg-obs')
   st.lastProvider = 'p'

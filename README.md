@@ -39,6 +39,7 @@
 | 次数间隔 | 距上一次审查 ≥ N 次动作 → 审 |
 | 时间间隔 | 距上一次审查 ≥ N 分钟 → 审 |
 | 预算 | 每回合最多审 N 次，用尽后静默跳过；默认 0 = 不限（用户指定，已取消上限） |
+| 被炉白名单 | 被炉工具（kotatsu join/send/poll…）直接放行；投递块（`<kotatsu room=`）触发的回合整体转聊天直通——工具与文本都不审（聊天形态，停等与 deny 是负资产） |
 | 连续不可用降级 | 连续 2 个回合监察不可用后暂停拦截（每回合仍探测，只记日志不再 deny/中断回合），成功一次自动收严 |
 | 未解决出口 | 同一回合提过两次意见后停止继续审，避免死循环 |
 | 后台会话只记录 | 不在 agents 注册表的会话（inbox 驱动的后台代理）转只记录模式：裁决照做、落 jsonl，正文永远放行 |
@@ -79,6 +80,10 @@
   "twinGapCalls": 10,             // 距上次审查 ≥ N 次动作
   "twinGapMinutes": 10,           // 距上次审查 ≥ N 分钟
   "twinMaxReviewsPerTurn": 0,     // 每回合审查预算；<=0 = 不限（默认）
+
+  // 被炉白名单（聊天形态不拦）
+  "twinChatBypass": true,         // 总开关：被炉工具直通 + 被炉回合文本不审
+  "twinToolWhitelist": ["_dsh_external_dsh_liubian_kotatsu_"], // 工具名前缀白名单
 
   // 送审上下文
   "twinContextMode": "flatten",   // flatten（拍平）| isolated（只带最近一条）| full（整段原样）
@@ -164,7 +169,7 @@
 
 ```bash
 node --check lib/impl.mjs
-node _dev/stub_test.mjs     # 39 项桩测：判据 / 指令拼装 / 裁决解析 / 触发规则 / 文本闸门五契约 / 工具闸门 / 送监形态 / v4 source / 降级 / provider 兜底 / 后台只记录
+node _dev/stub_test.mjs     # 45 项桩测：判据 / 指令拼装 / 裁决解析 / 触发规则 / 文本闸门五契约 / 工具闸门 / 送监形态 / v4 source / 降级 / provider 兜底 / 后台只记录 / 被炉白名单
 node _dev/gate_sim.mjs      # 触发规则在真实会话上的复算与对账
 node _dev/meter_check.cjs   # 用宿主 token-meter 的规则重放会话日志（排查"压缩失败"这类问题）
 node _dev/twin_review_stats.cjs  # 统计审查记录：通过 / 判偏离，并逐条列出判偏离理由
