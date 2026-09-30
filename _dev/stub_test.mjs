@@ -179,7 +179,7 @@ await checkAsync('provider 兜底·无 requestContext 时用 llm/stream 记账�
   }
   const dbg = await m.callTwin({ llm: {} }, { ...cfg }, agent, { kind: 'debug' })
   assert.equal(dbg.error, '', '有兜底就不该被 provider 关拦下')
-  assert.equal(dbg.messageCount, 2, '指令 + 伪造尾（走到了拼装阶段）')
+  assert.equal(dbg.messageCount, 1, '走到了拼装阶段（默认无伪造：仅监察指令一条）')
   // 无兜底 → 仍是 requestContext 错误
   T.stateFor('S-fallback-none')
   const agent2 = { session: { id: 'S-fallback-none', requestContext: () => null, deriveMessages: () => [] } }
@@ -833,7 +833,7 @@ await checkAsync('结构伪造·送监请求末尾是一条"思考已结束"的�
   st.step = 1
   const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
   await m.__test.handleToolGate(
-    ctx, { ...cfg, twinRetryDelayMs: 1 },
+    ctx, { ...cfg, twinForge: true, twinRetryDelayMs: 1 },
     { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_f1' },
     async () => ({ kind: 'allow' }),
     ctx.logger,
@@ -866,7 +866,8 @@ await checkAsync('结构伪造·送监请求末尾是一条"思考已结束"的�
 
 await checkAsync('结构伪造·正文默认为空（JSON 前缀方案生产证伪后回退）', async () => {
   assert.equal(T.DEFAULTS.twinForgeContent, '', '2026-09-26 实测：前缀上线后成功率从约一半跌到 0%，默认回退为空')
-  const forged = T.forgedAssistantMessage(T.DEFAULTS, 'p', 'm')
+  assert.equal(T.DEFAULTS.twinForge, false, '2026-09-30 抓包证伪：伪造尾上线缆变成"已总结完毕"的收尾助手消息，模型交白卷，默认关')
+  const forged = T.forgedAssistantMessage({ ...T.DEFAULTS, twinForge: true }, 'p', 'm')
   assert.equal(forged.role, 'assistant')
   assert.equal(forged.content[0].type, 'reasoning', '思考块在前（thinking 模式硬约束）')
   assert.equal(forged.content.some(b => b && b.type === 'text'), false, '默认不带正文块')
@@ -882,7 +883,7 @@ await checkAsync('结构伪造·模型只补 JSON 尾巴（显式开前缀时）
   const ctx = fakeCtx({ verdicts: [' true, "reason": "与指令一致", "correction": ""}'] })
   let ran = false
   await m.__test.handleToolGate(
-    ctx, { ...cfg, twinForgeContent: '{"conform":', twinRetryDelayMs: 1 },
+    ctx, { ...cfg, twinForge: true, twinForgeContent: '{"conform":', twinRetryDelayMs: 1 },
     { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_j1' },
     async () => { ran = true; return { kind: 'allow' } },
     ctx.logger,
