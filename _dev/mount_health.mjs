@@ -78,14 +78,14 @@ if (manifest === undefined) {
 // ── ③ profile node_modules junction（解析面）──────────────────────────────────
 const linkPath = join(PROFILE_DIR, 'node_modules', PKG)
 if (!existsSync(linkPath)) {
-  out('❌', `③ junction 不存在：${linkPath}`, null, '整个 profile 的 patch/package.json HMR 重载都会 PackageOverlayNotFound；重启 DSH 让注入器断电自愈重建，或重建 junction')
+  out('❌', `③ junction 不存在：${linkPath}`, null, '整个 profile 的 patch/package.json 重载都会 PackageOverlayNotFound；**手工重建该 junction**（或在 profile 目录跑一次 `pnpm install`）——注入器的启动自愈已随其退役消失（2026-10-01 管理员指令）')
   bad++
 } else if (!linkHealthy(linkPath)) {
   out('❌', `③ junction 存在但目标不可读（悬空）：${linkPath}`, null, '删掉后重建 junction 指向 ' + PLUGIN_DIR)
   bad++
 } else out('✅', `③ junction 健康：${linkPath} → ${PLUGIN_DIR}`)
 
-// ── ④ 注入器 registry（遗留双挂载源）────────────────────────────────────────
+// ── ④ 注入器 registry（**历史面**：2026-10-01 管理员指令全家解耦、该插件将删除；本项只用于查残渣）──
 const registryPath = join(DSH_HOME, 'super-injector', 'registry.json')
 const registry = readJson(registryPath) ?? []
 const regHit = Array.isArray(registry) ? registry.filter(e => String(e?.name ?? '') === PKG || String(e?.dir ?? '').includes(PKG)) : []

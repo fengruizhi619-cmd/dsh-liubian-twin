@@ -177,7 +177,17 @@ node _dev/meter_check.cjs   # 用宿主 token-meter 的规则重放会话日志�
 node _dev/twin_review_stats.cjs  # 统计审查记录：通过 / 判偏离，并逐条列出判偏离理由
 ```
 
-改 `lib/impl.mjs` 后热注入即生效（入口壳用带时间戳的动态导入绕开 ESM 模块缓存）；改 `name` / `inject` 需要重启。
+改 `lib/impl.mjs` 后**由 patch 触发的重装配生效**（入口壳用带时间戳的动态导入绕开 ESM 模块缓存：apply 一重跑就是新模块实例）；改 `name` / `inject` 需要重启。
+
+## 与 dsh-super-injector 无关（2026-10-01 解耦确认）
+
+管理员 14:28 指令：**所有插件不得依赖 `@dsh-external/dsh-super-injector`**（该插件将删除）。孪生本就不依赖它，证据三条：
+
+1. **装配面**：纯 bundle —— profile `dependencies` 里是 `link:`、在 `dsh.profile.bundles` 里、包内声明 `dsh.bundle.patch`；**不在**注入器 registry 里（该项已于 14:06 清理）。
+2. **代码面**：全仓检索 `dev_inject|dev_uninject|dev_plugin_status|super-injector` 只命中注释，零调用（`_dev/mount_health.mjs` 的 ④ 只做只读残留检查）。
+3. **热更面**：改 `impl.mjs` 走「touch/patch 触发重装配」，**不需要**注入器的 `uninject + inject`（该姿势对 bundle 归属插件是反模式，见 `_dev/挂载面审计_20261001.md`）。
+
+⚠️ **附带的运维变化**：注入器删除后，它启动时做的 **junction 自愈（`healProfileLinks`）也随之消失**——`link:` 依赖的 node_modules junction 若缺失/悬空，不会再自动重建，表现为「静默不挂载」。自查用 `node _dev/mount_health.mjs`（第 ③ 项），手工修法是重建该 junction（或在 profile 目录跑一次 `pnpm install`）。
 
 ## 许可
 
