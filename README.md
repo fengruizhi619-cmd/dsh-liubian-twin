@@ -171,11 +171,15 @@
 
 ```bash
 node --check lib/impl.mjs
-node _dev/stub_test.mjs     # 45 项桩测：判据 / 指令拼装 / 裁决解析 / 触发规则 / 文本闸门五契约 / 工具闸门 / 送监形态 / v4 source / 降级 / provider 兜底 / 后台只记录 / 被炉白名单
+node _dev/stub_test.mjs     # 53 项桩测：判据 / 指令拼装 / 裁决解析 / 触发规则 / 文本闸门五契约 / 工具闸门 / 送监形态 / v4 source / 降级 / provider 兜底 / 后台只记录 / 被炉白名单 / v2 监督模块 / 版本与 v2 指纹
+node _dev/mount_health.mjs  # 挂载面体检（只读）：区分「有意停用」与「静默消失」，并核对两处停用账本的一致性
+node _dev/mount_health_test.mjs  # 上者的夹具自测（临时 DSH_HOME/APPDATA，四态 + 判别对，5/5）——探针本身必须先被验
 node _dev/gate_sim.mjs      # 触发规则在真实会话上的复算与对账
 node _dev/meter_check.cjs   # 用宿主 token-meter 的规则重放会话日志（排查"压缩失败"这类问题）
 node _dev/twin_review_stats.cjs  # 统计审查记录：通过 / 判偏离，并逐条列出判偏离理由
 ```
+
+> ⚠️ 跑需要起 **node 子进程**的脚本时：本机 `node` 是包装脚本（`node.cmd` → `"DSH Desktop.exe" --import clear-env.mjs`），而 `clear-env.mjs` **会清掉 `ELECTRON_RUN_AS_NODE`**。少了这一个变量，`spawn(process.execPath, …)` 启动的是 **Electron GUI**——脚本一行不跑、输出空、`exit 0`（**假绿**）。必须显式回填 `ELECTRON_RUN_AS_NODE: '1'`。详见 `_dev/启用核对清单_20261001.md` §3。
 
 改 `lib/impl.mjs` 后**由 patch 触发的重装配生效**（入口壳用带时间戳的动态导入绕开 ESM 模块缓存：apply 一重跑就是新模块实例）；改 `name` / `inject` 需要重启。
 
