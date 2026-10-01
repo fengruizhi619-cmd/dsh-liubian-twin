@@ -1154,5 +1154,143 @@ await checkAsync('工具闸门·闸门自身异常 → 放行（绝不影响执�
   assert.ok(decision.kind === 'deny')
 })
 
+/* ── v2 监督模块（twinV2）── */
+
+/** v2 假环境：影子会话 + 事件驱动器（listeners 手动触发，等价白泽 #197.3 的事件面）。 */
+function fakeV2Env({ bootstrapAck = true, verdict = null } = {}) {
+  const created = []
+  const resumed = []
+  const followups = []
+  const listeners = []
+  const shadowId = 'session-shadow1'
+  const shadowAgent = {
+    id: shadowId,
+    session: { id: shadowId },
+    followup: (msg) => followups.push(msg),
+  }
+  const fire = (event) => {
+    const sid = created[0]?.sessionId ?? shadowId // 用实现真实创建的影子 id（写死的名字不存在）
+    for (const l of listeners) if (l.name === 'session/event') l.fn({ id: sid }, event)
+  }
+  const ctx = {
+    logger: { info: () => {}, warn: () => {}, debug: () => {} },
+    reflect: { get: (n) => n === 'agentDefaultModel' ? { currentSelection: () => ({ provider: 'p', model: 'm' }) } : undefined },
+    get: (n) => n === 'agentDefaultModel' ? { currentSelection: () => ({ provider: 'p', model: 'm' }) } : undefined,
+    agents: {
+      create: async (opts) => { created.push(opts); return { agent: shadowAgent } },
+      get: (id) => (id === shadowId ? shadowAgent : undefined),
+      resume: async (o) => { resumed.push(o); return { agent: shadowAgent } },
+    },
+    on: (name, fn) => { listeners.push({ name, fn }); return () => {} },
+  }
+  const tick = () => new Promise(r => setTimeout(r, 5))
+  const ackEvent = () => fire({ type: 'assistant/message', seq: 5, data: { message: { content: [{ type: 'text', text: '已就绪' }] } } })
+  const verdictEvent = (v) => fire({ type: 'assistant/message', seq: 9, data: { message: { content: [{ type: 'text', text: `监察意见：${v.reason || ''}\n${JSON.stringify(v)}` }] } } })
+  return {
+    ctx, created, resumed, followups, shadowId, shadowAgent,
+    async runReview(targetDesc = 'write(path=/tmp/x)', kind = 'tool') {
+      const { agent } = fakeAgent()
+      agent.session.id = 'S-main-v2'
+      agent.session.header = { cwd: 'E:/work' }
+      const p = m.__test.v2.callTwinViaShadow(
+        ctx, { ...cfg, twinV2: true, twinV2ReplyTimeoutMs: 200, twinV2BootstrapTimeoutMs: 200, twinV2Reask: 0 }, agent,
+        { kind, targetDesc, meta: {}, signal: new AbortController().signal, log: ctx.logger },
+      )
+      await tick()
+      if (bootstrapAck) ackEvent()
+      await tick()
+      if (verdict) verdictEvent(verdict)
+      await tick()
+      return p
+    },
+  }
+}
+
+await checkAsync('v2·创建形状 + 投递形状 + 裁决回收（happy path）', async () => {
+  T.v2.reset()
+  const env = fakeV2Env({ verdict: { conform: false, reason: '越权删配置', violated: [3] } })
+  const res = await env.runReview('write(path=/etc/hosts)')
+  assert.equal(env.created.length, 1, 'create 恰好一次')
+  assert.ok(env.created[0].sessionId.startsWith('session-'), '影子 id 用 session- 前缀（白泽 #197.2）')
+  assert.deepEqual(env.created[0].agentOptions, { provider: 'p', model: 'm' }, 'agentOptions 必带（{{model}} 事故同源）')
+  assert.equal(env.created[0].meta.cwd, 'E:/work', 'cwd 继承主会话')
+  assert.equal(env.followups.length, 2, 'bootstrap + 审查请求共两条')
+  const boot = env.followups[0]
+  assert.equal(boot.role, 'user'); assert.equal(boot.source.kind, 'plugin:dsh-liubian-twin')
+  assert.ok(boot.content[0].text.includes('背景照抄'), 'bootstrap 是照抄消息')
+  const rev = env.followups[1]
+  assert.ok(rev.content[0].text.includes('被审对象'), '审查请求带待审对象')
+  assert.equal(res.status, 'deny', 'conform:false → deny')
+  assert.deepEqual(res.verdict.violated, [3])
+})
+
+await checkAsync('v2·bootstrap 回执先于审查（"已就绪"不会被误判成裁决）', async () => {
+  T.v2.reset()
+  const env = fakeV2Env({ verdict: { conform: true, reason: 'ok', violated: [] } })
+  const res = await env.runReview()
+  assert.equal(res.status, 'conform')
+  assert.ok(env.followups[0].content[0].text.includes('背景照抄'))
+  assert.equal(env.followups.length, 2, 'bootstrap 回执没有触发额外投递')
+})
+
+await checkAsync('v2·超时 fail-open（监督不回话 → skipped，走降级口径）', async () => {
+  T.v2.reset()
+  const env = fakeV2Env({ bootstrapAck: true, verdict: null }) // 永不回裁决
+  const res = await env.runReview()
+  assert.equal(res.status, 'skipped')
+  assert.ok(/超时/.test(res.error), '错误里写明超时')
+})
+
+await checkAsync('v2·开关回退（twinV2 关 = 走 v1，不建影子）', async () => {
+  T.v2.reset()
+  const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
+  const { agent } = fakeAgent()
+  agent.session.id = 'S-v1-off'
+  const st = Object.assign(T.stateFor('S-v1-off'), { recordInSession: true })
+  T.resetTurn(st, 1); st.turn = 1; st.step = 1
+  let ran = false
+  await m.__test.handleToolGate(ctx, { ...cfg, twinV2: false },
+    { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_v1' },
+    async () => { ran = true; return { kind: 'allow' } }, ctx.logger)
+  assert.equal(ran, true, 'v1 路径照常')
+  assert.equal(T.v2.isShadowSessionId('session-shadow1'), false, '关着就不会登记影子')
+})
+
+await checkAsync('v2·监督会话自己的事件不进闸门（防自我递归）', async () => {
+  T.v2.reset()
+  T.v2.registerShadow('S-main-x', 'session-shadow9')
+  assert.equal(T.v2.isShadowSessionId('session-shadow9'), true)
+  const ctx = fakeCtx({ verdicts: [{ conform: true, reason: 'ok', correction: '' }] })
+  const { agent } = fakeAgent()
+  agent.session.id = 'session-shadow9'
+  const st = Object.assign(T.stateFor('session-shadow9'), { recordInSession: true })
+  T.resetTurn(st, 1); st.turn = 1; st.step = 1
+  let ran = false
+  await m.__test.handleToolGate(ctx, { ...cfg, twinV2: true },
+    { name: 'read', arguments: {}, agent, signal: new AbortController().signal, callId: 'call_shadow' },
+    async () => { ran = true; return { kind: 'allow' } }, ctx.logger)
+  assert.equal(ran, true, '监督会话的工具调用直接放行（豁免）')
+})
+
+await checkAsync('v2·serializeFull 照抄保真 + 上限截断', async () => {
+  T.v2.reset()
+  const msgs = [
+    { role: 'user', content: [{ type: 'text', text: '帮我改配置' }], source: { kind: 'user' } },
+    { role: 'assistant', content: [
+      { type: 'reasoning', text: '想想先' },
+      { type: 'tool-call', name: 'write', arguments: { path: '/a' } },
+    ] },
+    { role: 'user', content: [{ type: 'tool-result', toolCallId: 't1', isError: false, content: [{ type: 'text', text: '写好了' }] }] },
+  ]
+  const full = T.v2.serializeFull(msgs, 0)
+  assert.ok(full.includes('【用户】帮我改配置'))
+  assert.ok(full.includes('（思考）想想先'))
+  assert.ok(full.includes('（调用工具 write'))
+  assert.ok(full.includes('（工具结果 写好了'))
+  const capped = T.v2.serializeFull(msgs, 40)
+  assert.ok(capped.includes('已按照抄上限截断'))
+  assert.ok(capped.length <= 80, '截断后长度受限')
+})
+
 console.log(results.join('\n'))
 console.log(`\n${results.filter(r => r.startsWith('PASS')).length}/${results.length} 通过`)
