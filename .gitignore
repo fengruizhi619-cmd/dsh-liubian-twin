@@ -9,3 +9,4 @@ _dev/hf/
 .idea/
 __pycache__/
 _dev/commitmsg*.txt
+*.bak-*

@@ -1292,5 +1292,29 @@ await checkAsync('v2·serializeFull 照抄保真 + 上限截断', async () => {
   assert.ok(capped.length <= 80, '截断后长度受限')
 })
 
+/* ── 7. 版本与 v2 指纹（2026-10-01 上任补债）──────────────────────────────
+ * 事故背景：v2 监督模块（M1）与 v1 同处一份代码，两者挂载日志都是 v0.1.0 ——
+ * 启用 v2 后「线上跑的是哪一版」没有可分辨的判据，B 判据（现象反驳假设）无从下手。
+ * 两条护栏：① 两处版本号必须同步（家族踩过版本漂移）；② 挂载行必须带 v2 开关指纹。
+ */
+
+await checkAsync('版本同步：impl PLUGIN_VERSION = package.json version（防两处漂移）', async () => {
+  const fs = await import('node:fs')
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(m.PLUGIN_VERSION, pkg.version, `impl=${m.PLUGIN_VERSION} package.json=${pkg.version}`)
+  assert.match(m.PLUGIN_VERSION, /^\d+\.\d+\.\d+$/, '版本号必须是 x.y.z')
+})
+
+await checkAsync('挂载日志带 v2=开/关 指纹（与版本号解耦的运行时判据）', async () => {
+  const fs = await import('node:fs')
+  const src = fs.readFileSync(new URL('../lib/impl.mjs', import.meta.url), 'utf8')
+  const i = src.indexOf('已挂载：判据=')
+  assert.ok(i > 0, '找得到挂载日志行')
+  const region = src.slice(i, i + 600)
+  assert.ok(region.includes('v2=${'), '挂载行要带 v2= 指纹')
+  assert.ok(region.includes('cfg.twinV2'), '指纹取自 cfg.twinV2（不是写死）')
+  assert.equal(T.DEFAULTS.twinV2, false, 'v2 默认关 = 现网行为不变（一键回退）')
+})
+
 console.log(results.join('\n'))
 console.log(`\n${results.filter(r => r.startsWith('PASS')).length}/${results.length} 通过`)
