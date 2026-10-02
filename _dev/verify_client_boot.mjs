@@ -68,7 +68,12 @@ check('清单：package.json 声明 ./client 导出 + dsh.client 段 + 版本与
   assert.equal(pkg.exports['./client'], './lib/client.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.equal(pkg.dsh.client.immediately, true)
-  assert.ok(Array.isArray(pkg.dsh.client.inject) && pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-conversation'))
+  // 2026-10-03 事故：inject 漏了 dsh-client-runtime → 冷启动时 window.__ModuleLoader__
+  // 尚不存在，client 模块求值即死、页签消失（热挂载时 runtime 已被别的插件带起来，
+  // 所以"打开时有、重启后没"）。kotatsu/notes 两个冷启动正常样本都是 runtime + conversation 双声明。
+  for (const pkgName of ['@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-conversation']) {
+    assert.ok(pkg.dsh.client.inject.includes(pkgName), `dsh.client.inject 缺 ${pkgName}`)
+  }
   const implSrc = readFileSync(new URL('../lib/impl.mjs', import.meta.url), 'utf8')
   const m = implSrc.match(/PLUGIN_VERSION = '([\d.]+)'/)
   assert.ok(m, 'impl.mjs 里有 PLUGIN_VERSION')
