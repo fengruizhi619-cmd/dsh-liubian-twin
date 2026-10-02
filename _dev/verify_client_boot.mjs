@@ -75,6 +75,19 @@ check('清单：package.json 声明 ./client 导出 + dsh.client 段 + 版本与
   assert.equal(pkg.version, m[1], `package.json=${pkg.version} impl=${m[1]}`)
 })
 
+check('入口 inject 声明：main.mjs 必须含 webServer（2026-10-03 事故的静态护栏）', () => {
+  const mainSrc = readFileSync(new URL('../lib/main.mjs', import.meta.url), 'utf8')
+  const m = mainSrc.match(/export const inject = \[([^\]]*)\]/)
+  assert.ok(m, 'main.mjs 里有静态 inject 数组')
+  const declared = m[1].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
+  for (const svc of ['webServer', 'tools', 'llm', 'agents']) {
+    assert.ok(declared.includes(svc), `inject 缺 '${svc}'——未声明的宿主服务在 apply 里访问即抛，整个插件会装配失败（含 client 半）`)
+  }
+  // 面板挂载必须自带兜底与 try/catch：面板是附属品，绝不连坐闸门。
+  const implSrc2 = readFileSync(new URL('../lib/impl.mjs', import.meta.url), 'utf8')
+  assert.ok(implSrc2.includes("ctx.reflect?.get?.('webServer')"), 'mountTwinPanel 要有 reflect 兜底（inject 未生效的窗口期/热注入场景）')
+})
+
 check('apply：向 conversation.view 注册「孪生」页签，effect 带清理', () => {
   assert.deepEqual(mod.inject, ['slots'])
   let injectCalls = 0
