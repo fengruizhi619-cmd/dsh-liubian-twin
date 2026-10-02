@@ -12,6 +12,10 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const results = []
 function check(name, fn) {
@@ -78,6 +82,26 @@ check('清单：package.json 声明 ./client 导出 + dsh.client 段 + 版本与
   const m = implSrc.match(/PLUGIN_VERSION = '([\d.]+)'/)
   assert.ok(m, 'impl.mjs 里有 PLUGIN_VERSION')
   assert.equal(pkg.version, m[1], `package.json=${pkg.version} impl=${m[1]}`)
+})
+
+check('exports 放行 ./package.json：宿主读清单的那条 resolve 必须真通（2026-10-03 第二击）', () => {
+  // dsh-client-modules 的 resolveMeta 用 createRequire(入口).resolve('<包名>/package.json')
+  // 读插件清单（lib/index.js L756）。exports 一旦收窄（加 ./client 时忘了放行 ./package.json），
+  // 这条 resolve 抛 ERR_PACKAGE_PATH_NOT_EXPORTED → client 半被静默当"不存在"→ 页签消失。
+  // 这里按宿主的调用形状，走 **profile junction** 真解析一次（不是只查字符串）。
+  const profileDir = process.env.DSH_PROFILE_DIR || join(homedir(), '.dsh', 'profiles', 'desktop')
+  const entry = join(resolve(profileDir), 'node_modules', 'dsh-liubian-twin', 'lib', 'main.mjs')
+  assert.ok(readFileSync(entry, 'utf8').length > 0, `junction 入口可读：${entry}`)
+  const req = createRequire(entry)
+  let resolved = ''
+  try {
+    resolved = req.resolve('dsh-liubian-twin/package.json')
+  } catch (e) {
+    assert.fail(`宿主同款 resolve 失败：${e.code || ''} ${String(e.message).split('\n')[0]}——exports 必须放行 ./package.json`)
+  }
+  const j = JSON.parse(readFileSync(resolved, 'utf8'))
+  assert.equal(j.name, 'dsh-liubian-twin')
+  assert.ok(j.dsh?.client, '解析到的清单必须带 dsh.client')
 })
 
 check('入口 inject 声明：main.mjs 必须含 webServer（2026-10-03 事故的静态护栏）', () => {
