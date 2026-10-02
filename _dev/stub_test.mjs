@@ -1292,6 +1292,48 @@ await checkAsync('v2·serializeFull 照抄保真 + 上限截断', async () => {
   assert.ok(capped.length <= 80, '截断后长度受限')
 })
 
+/* ── 8. v3 M2：影子会话面板数据面（shadowStatus / shadowRead，只读）──────── */
+
+check('v3·无影子 → status 给 null、read 给引导性 note，都不抛', () => {
+  T.v2.reset()
+  const s = T.v2.shadowStatusPayload('sess-none')
+  assert.equal(s.shadowId, null)
+  assert.equal(s.title, '孪生')
+  const r = T.v2.shadowReadPayload('sess-none', 50)
+  assert.equal(r.shadowId, null)
+  assert.equal(r.messages.length, 0)
+  assert.ok(String(r.note).includes('还没有孪生影子'), 'note 要引导「影子何时创建」')
+})
+
+check('v3·有影子 → 角色面正确、孪生指令折叠标记、limit 截尾且 total 报全量', () => {
+  T.v2.reset()
+  T.v2.registerShadow('sess-main', 'session-shadow-x')
+  T.v2.setAgent('sess-main', {
+    session: {
+      deriveMessages: () => ([
+        { role: 'user', content: [{ type: 'text', text: '【背景照抄】主对话全文……' }], source: { kind: 'plugin:dsh-liubian-twin', form: 'notice', summary: '监察 bootstrap（主对话照抄）' } },
+        { role: 'assistant', content: [{ type: 'text', text: '{"conform":true}' }] },
+        { role: 'user', content: [{ type: 'text', text: '真实用户的话' }], source: { kind: 'user' } },
+        { role: 'assistant', content: [{ type: 'reasoning', text: '只有思考没有正文' }] },
+      ]),
+    },
+  })
+  const full = T.v2.shadowReadPayload('sess-main', 200)
+  assert.equal(full.shadowId, 'session-shadow-x')
+  assert.equal(full.total, 4, 'total 报全量派生消息数')
+  assert.equal(full.messages.length, 3, '只有思考、没有文本块的消息被剔除')
+  assert.equal(full.messages[0].directive, true, '【背景照抄】指令要折叠标记')
+  assert.equal(full.messages[0].summary, '监察 bootstrap（主对话照抄）')
+  assert.equal(full.messages[1].directive, false, '监督的回复不是指令')
+  assert.equal(full.messages[2].directive, false, 'source.kind 非孪生的投递不算指令')
+  const capped = T.v2.shadowReadPayload('sess-main', 3)
+  assert.equal(capped.total, 4)
+  assert.equal(capped.messages.length, 2, 'limit=3 取尾部 3 条，其中纯思考的一条被剔除')
+  const s = T.v2.shadowStatusPayload('sess-main')
+  assert.equal(s.ready, true)
+  assert.equal(s.requests, 0, '未投递审查时 requests 为 0')
+})
+
 /* ── 7. 版本与 v2 指纹（2026-10-01 上任补债）──────────────────────────────
  * 事故背景：v2 监督模块（M1）与 v1 同处一份代码，两者挂载日志都是 v0.1.0 ——
  * 启用 v2 后「线上跑的是哪一版」没有可分辨的判据，B 判据（现象反驳假设）无从下手。
